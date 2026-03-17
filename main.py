@@ -107,6 +107,75 @@ class AmpKnob(ctk.CTkCanvas):
             if self.command:
                 self.command(db_values[self.current_pos_index])
 
+class VacuumTube(ctk.CTkCanvas):
+    def __init__(self, master, **kwargs):
+        super().__init__(master, width=40, height=85, bg=kwargs.get('bg', '#3B1C1A'), highlightthickness=0)
+        self.is_on = False
+        self.is_animating = False
+        self.glow_state = 0.0  # Range 0.0 to 1.0
+        self.glow_dir = 1
+        self.draw_tube()
+
+    def draw_tube(self):
+        self.delete("all")
+        # 1. Base Pins
+        for x in [14, 20, 26]:
+            self.create_line(x, 70, x, 80, fill="#888888", width=2)
+        
+        # 2. Black Plastic Base
+        self.create_rectangle(10, 65, 30, 72, fill="#1A1A1A", outline="#000000")
+        
+        # 3. Internal Plates (Dark grey structure)
+        self.create_rectangle(14, 25, 26, 55, fill="#2A2A2A", outline="#111111")
+        
+        # 4. Heater Filament / Glow
+        if self.is_on:
+            # Colors array from dark red to bright hot yellow
+            colors = ["#4A0000", "#8B0000", "#CC3300", "#FF6600", "#FFCC00"]
+            idx = int(self.glow_state * 4)
+            glow_color = colors[idx]
+            core_color = "#FFFFDD" if idx > 2 else glow_color
+            
+            # Draw the glowing heater
+            self.create_rectangle(16, 30, 24, 50, fill=glow_color, outline="")
+            self.create_line(20, 25, 20, 55, fill=core_color, width=2)
+        else:
+            # Cold filament
+            self.create_line(20, 25, 20, 55, fill="#111111", width=2)
+            
+        # 5. Glass Envelope (drawn last so it overlaps)
+        self.create_polygon(12, 65,  10, 45,  10, 20,  20, 8,  30, 20,  30, 45,  28, 65, 
+                            fill="", outline="#AACCFF", smooth=True, width=1)
+        # Simple glass glare/reflection
+        self.create_line(13, 22, 13, 40, fill="#FFFFFF", width=1)
+
+    def start_glow(self):
+        self.is_animating = True
+        self.is_on = True
+        self.animate_glow()
+
+    def stop_glow(self):
+        self.is_animating = False
+        self.is_on = False
+        self.glow_state = 0.0
+        self.draw_tube()
+
+    def animate_glow(self):
+        if not self.is_animating:
+            return
+            
+        # Throb the glow state up and down smoothly
+        self.glow_state += 0.05 * self.glow_dir
+        if self.glow_state >= 1.0:
+            self.glow_state = 1.0
+            self.glow_dir = -1
+        elif self.glow_state <= 0.3: # Don't go entirely dark when under load
+            self.glow_state = 0.3
+            self.glow_dir = 1
+            
+        self.draw_tube()
+        self.after(50, self.animate_glow) # 50ms = smooth 20fps animation
+
 def bake_worker(di_path, ir_path, input_wav_path, gain_db, output_dir, model_name, queue):
     """
     Isolated process for the Baker Engine pipeline.
@@ -612,9 +681,15 @@ class PMNamConverter(ctk.CTk):
         )
         self.baker_desc.pack(pady=15)
 
-        # Selection Frame
-        self.selection_frame = ctk.CTkFrame(self.baker_tab, corner_radius=10, fg_color="#1a1a1a", border_width=2, border_color="#333333")
+        # Selection Frame (Oxblood Panel)
+        self.selection_frame = ctk.CTkFrame(self.baker_tab, corner_radius=15, fg_color=OXBLOOD_PANEL, border_width=4, border_color="#222222")
         self.selection_frame.pack(padx=20, pady=10, fill="both", expand=True)
+
+        # Tube Display Area
+        self.tube_frame = ctk.CTkFrame(self.selection_frame, fg_color="transparent")
+        self.tube_frame.pack(pady=(15, 0))
+        self.baker_tube = VacuumTube(self.tube_frame, bg=OXBLOOD_PANEL)
+        self.baker_tube.pack()
 
         # DI Model Selection
         ctk.CTkLabel(self.selection_frame, text="Step 1: Select DI Model (.nam)", font=ctk.CTkFont(weight="bold")).pack(pady=(15, 5))
@@ -700,7 +775,8 @@ class PMNamConverter(ctk.CTk):
             return
 
         self.update_status("Baking... This will take a few minutes.", "#ffcc00")
-        self.bake_button.configure(state="disabled")
+        self.bake_button.configure(state="disabled", text="BAKING...")
+        self.baker_tube.start_glow()
         
         # Prepare output dir
         base_name = os.path.basename(di).replace(".nam", "")
@@ -731,11 +807,13 @@ class PMNamConverter(ctk.CTk):
                     self.update_status(content, "#ffcc00")
                 elif msg_type == "success":
                     self.update_status(content, "#44ff44")
-                    self.bake_button.configure(state="normal")
+                    self.bake_button.configure(state="normal", text="BAKE NEW FULL RIG")
+                    self.baker_tube.stop_glow()
                     return
                 elif msg_type == "error":
                     self.update_status(f"Baker Error: {content}", "#ff4d4d")
-                    self.bake_button.configure(state="normal")
+                    self.bake_button.configure(state="normal", text="BAKE NEW FULL RIG")
+                    self.baker_tube.stop_glow()
                     return
         except:
             pass
