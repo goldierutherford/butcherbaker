@@ -454,15 +454,20 @@ class PMNamConverter(ctk.CTk):
                 </form>
             </div>
             <div class="card">
-                <h3>Available Rigs (.nam)</h3>
-                <ul>
-                    {% for file in files %}
-                        <li>
-                            <span style="word-break: break-all; text-align: left; padding-right: 10px;">{{ file }}</span>
-                            <a href="/download/{{ file }}" class="btn">GET</a>
-                        </li>
-                    {% endfor %}
-                </ul>
+                <h3>Your Library</h3>
+                {% for category, file_list in categorized_files.items() %}
+                    <h4 style="text-align: left; color: #5A2E2A; margin-bottom: 5px;">{{ category }}</h4>
+                    <ul>
+                        {% for file in file_list %}
+                            <li>
+                                <span style="word-break: break-all; text-align: left; padding-right: 10px; font-size: 0.9em;">{{ file }}</span>
+                                <a href="/download/{{ category }}/{{ file }}" class="btn" style="padding: 8px 15px;">GET</a>
+                            </li>
+                        {% else %}
+                            <li style="color: #888; font-style: italic; justify-content: center;">Empty</li>
+                        {% endfor %}
+                    </ul>
+                {% endfor %}
             </div>
         </body>
         </html>
@@ -471,8 +476,12 @@ class PMNamConverter(ctk.CTk):
         @app.route('/')
         def index():
             msg = request.args.get('msg')
-            files = [f for f in os.listdir(DOWNLOADS_DIR) if f.endswith('.nam')]
-            return render_template_string(HTML_TEMPLATE, files=files, msg=msg)
+            categorized_files = {
+                "Full_Rigs": [f for f in os.listdir(RIGS_DIR) if f.endswith('.nam')],
+                "DI_Amps": [f for f in os.listdir(DI_DIR) if f.endswith('.nam')],
+                "Cabinet_IRs": [f for f in os.listdir(IR_DIR) if f.endswith('.wav')]
+            }
+            return render_template_string(HTML_TEMPLATE, categorized_files=categorized_files, msg=msg)
 
         @app.route('/upload', methods=['POST'])
         def upload_file():
@@ -495,12 +504,27 @@ class PMNamConverter(ctk.CTk):
             file.save(save_path)
             return f"<html><script>window.location.href='/?msg=Uploaded {filename}';</script></html>"
 
-        @app.route('/download/<filename>')
-        def download_file(filename):
-            # Strict sandbox: only allow files from downloads dir and with .nam ext
-            if not filename.endswith('.nam'):
-                return "Unauthorized", 403
-            return send_from_directory(DOWNLOADS_DIR, filename)
+        @app.route('/download/<folder>/<filename>')
+        def download_file(folder, filename):
+            # Strict mapping to prevent directory traversal
+            folder_map = {
+                "Full_Rigs": RIGS_DIR,
+                "DI_Amps": DI_DIR,
+                "Cabinet_IRs": IR_DIR
+            }
+            
+            if folder not in folder_map:
+                return "Invalid directory", 403
+                
+            target_dir = folder_map[folder]
+            
+            # Strict extension check based on folder
+            if folder in ["Full_Rigs", "DI_Amps"] and not filename.endswith('.nam'):
+                return "Unauthorized file type", 403
+            if folder == "Cabinet_IRs" and not filename.endswith('.wav'):
+                return "Unauthorized file type", 403
+                
+            return send_from_directory(target_dir, filename)
 
         return app
 
