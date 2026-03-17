@@ -449,8 +449,13 @@ class PMNamConverter(ctk.CTk):
                 <p style="font-size: 0.9em;">Files will be available for 'The Baker'.</p>
                 {% if msg %} <div class="success">{{ msg }}</div> {% endif %}
                 <form method="post" action="/upload" enctype="multipart/form-data">
+                    <select name="category" style="width: 100%; margin-bottom: 10px; padding: 8px; border-radius: 4px; background: #F4EBD9; color: #2A1A10; border: 1px solid #8B6D3B;">
+                        <option value="Full_Rigs">Full Rig (.nam)</option>
+                        <option value="DI_Amps">DI Amp Model (.nam)</option>
+                        <option value="Cabinet_IRs">Cabinet IR (.wav)</option>
+                    </select>
                     <input type="file" name="file"><br>
-                    <button type="submit" class="btn">SEND TO BAKER ENGINE</button>
+                    <button type="submit" class="btn" style="width: 100%;">UPLOAD TO LIBRARY</button>
                 </form>
             </div>
             <div class="card">
@@ -491,18 +496,25 @@ class PMNamConverter(ctk.CTk):
             if file.filename == '':
                 return "No selected file", 400
             
-            # Save based on extension
-            if file.filename.lower().endswith('.nam'):
-                target_dir = DOWNLOADS_DIR
-            elif file.filename.lower().endswith('.wav'):
-                target_dir = ASSETS_DIR
-            else:
-                target_dir = DOWNLOADS_DIR # Default
+            category = request.form.get('category', 'Full_Rigs')
+            folder_map = {
+                "Full_Rigs": RIGS_DIR,
+                "DI_Amps": DI_DIR,
+                "Cabinet_IRs": IR_DIR
+            }
+            target_dir = folder_map.get(category, RIGS_DIR)
+            
+            # File extension validation
+            ext = file.filename.lower()
+            if category in ["Full_Rigs", "DI_Amps"] and not ext.endswith('.nam'):
+                return "<html><script>window.location.href='/?msg=Error: Must be a .nam file';</script></html>"
+            if category == "Cabinet_IRs" and not ext.endswith('.wav'):
+                return "<html><script>window.location.href='/?msg=Error: Must be a .wav file';</script></html>"
 
             filename = "".join([c for c in file.filename if c.isalnum() or c in ('.', '_', '-')])
             save_path = os.path.join(target_dir, filename)
             file.save(save_path)
-            return f"<html><script>window.location.href='/?msg=Uploaded {filename}';</script></html>"
+            return f"<html><script>window.location.href='/?msg=Successfully Uploaded {filename}';</script></html>"
 
         @app.route('/download/<folder>/<filename>')
         def download_file(folder, filename):
