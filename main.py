@@ -16,6 +16,10 @@ from werkzeug.serving import make_server
 import qrcode
 from PIL import Image, ImageTk
 from tkinter import filedialog
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Appearance & Theme
 ctk.set_appearance_mode("dark")
@@ -28,7 +32,7 @@ if not os.path.exists(DOWNLOADS_DIR):
     os.makedirs(DOWNLOADS_DIR, exist_ok=True)
 
 # API Configuration
-TONE3000_API_KEY = "b57ae63a-f178-4d28-b5a2-a7c4a3fb6414" 
+TONE3000_API_KEY = os.getenv("TONE3000_API_KEY")
 API_BASE_URL = "https://www.tone3000.com/api/v1"
 API_AUTH_URL = f"{API_BASE_URL}/auth/session"
 API_SEARCH_URL = f"{API_BASE_URL}/tones/search"
@@ -52,8 +56,8 @@ class AmpKnob(ctk.CTkCanvas):
         bg_color = kwargs.get('bg', OXBLOOD_PANEL)
         super().__init__(master, width=80, height=80, bg=bg_color, highlightthickness=0)
         self.command = command
-        # Positions: 0dB (left), +3dB (center), +6dB (right)
-        self.positions = [135, 90, 45] # Angles in degrees
+        # Positions: 0dB, +3dB, +6dB, +9dB, +12dB, +14dB
+        self.positions = [180, 144, 108, 72, 36, 0] # Angles in degrees
         self.current_pos_index = 0 
         
         self.bind("<B1-Motion>", self.turn_knob)
@@ -95,7 +99,7 @@ class AmpKnob(ctk.CTkCanvas):
             self.draw_knob()
             
             # Pass the corresponding dB value back to the app
-            db_values = [0, 3, 6]
+            db_values = [0, 3, 6, 9, 12, 14]
             if self.command:
                 self.command(db_values[self.current_pos_index])
 
@@ -329,14 +333,13 @@ class PMNamConverter(ctk.CTk):
         self.oxblood_frame = ctk.CTkFrame(self.knob_frame, fg_color=OXBLOOD_PANEL)
         self.oxblood_frame.pack(pady=10)
         
-        self.gain_knob = AmpKnob(master=self.oxblood_frame, command=lambda v: self.gain_db.set(v))
+        self.gain_knob = AmpKnob(master=self.oxblood_frame, command=self.update_gain_and_warning)
         self.gain_knob.pack()
         
         labels_frame = ctk.CTkFrame(self.knob_frame, fg_color="transparent")
         labels_frame.pack()
-        ctk.CTkLabel(labels_frame, text="0dB", text_color=PANEL_TEXT, font=ctk.CTkFont(size=10)).pack(side="left", padx=15)
-        ctk.CTkLabel(labels_frame, text="+3dB", text_color=PANEL_TEXT, font=ctk.CTkFont(size=10)).pack(side="left", padx=15)
-        ctk.CTkLabel(labels_frame, text="+6dB", text_color=PANEL_TEXT, font=ctk.CTkFont(size=10)).pack(side="left", padx=15)
+        for val in [0, 3, 6, 9, 12, 14]:
+            ctk.CTkLabel(labels_frame, text=f"{val}dB", text_color=PANEL_TEXT, font=ctk.CTkFont(size=10)).pack(side="left", padx=5)
 
         self.forge_button = ctk.CTkButton(
             self.processor_frame, text="ENGAGE SCALER", 
@@ -344,7 +347,10 @@ class PMNamConverter(ctk.CTk):
             command=self.start_forging,
             fg_color="#8d1f1f", hover_color="#ba2b2b", text_color=PANEL_TEXT
         )
-        self.forge_button.pack(pady=(20, 30), padx=40, fill="x")
+        self.forge_button.pack(pady=(20, 10), padx=40, fill="x")
+
+        self.high_gain_warning = ctk.CTkLabel(self.processor_frame, text="Caution: High boosts may raise the noise floor or clip hardware.", text_color="#ff4d4d", font=ctk.CTkFont(size=11))
+        # Initial pack depends on default value (0), but we'll manage it via callback
 
         # --- Tab 2: The Baker Engine ---
         self.baker_tab = self.tabview.tab("The Baker Engine")
@@ -754,61 +760,19 @@ class PMNamConverter(ctk.CTk):
             else:
                 print("DEBUG: raw_results is EMPTY")
 
-            # Step 2: Strict Client-Side Filtering
+            # Step 2: Simplified Metadata Filtering
             filtered_results = []
             for tone in raw_results:
-                if not isinstance(tone, dict):
-                    continue
+                if not isinstance(tone, dict): continue
+                platform_val = str(tone.get("platform", "")).lower()
+                gear_val = str(tone.get("gear", "")).lower()
                 
-                # Extract models list. If the API provides a nested models array, use it.
-                models_list = tone.get("models", [])
-                if not isinstance(models_list, list):
-                    models_list = []
-
-                # Fallback: if there's no nested models list, but the root tone has a valid URL/filename, treat it as a model.
-                # Crucial: only do this if the value is a string (not None or empty).
-                if not models_list:
-                    root_url = tone.get("model_url")
-                    root_file = tone.get("file_name")
-                    if isinstance(root_url, str) and root_url.strip():
-                        models_list = [tone]
-                    elif isinstance(root_file, str) and root_file.strip():
-                        models_list = [tone]
-                
-                # Strict extension matching on model properties
-                valid_models = []
-                for model in models_list:
-                    if not isinstance(model, dict):
-                        continue
-                        
-                    # Target both url and file name, stripping query params for extension check
-                    m_url = str(model.get("model_url", "")).lower().split('?')[0]
-                    m_file = str(model.get("file_name", "")).lower().split('?')[0]
-                    
-                    if selected_type in ["Full Rig", "DI / Amp"]:
-                        if m_url.endswith(".nam") or m_file.endswith(".nam"):
-                            valid_models.append(model)
-                    elif selected_type == "IR (Cab)":
-                        if m_url.endswith(".wav") or m_file.endswith(".wav"):
-                            valid_models.append(model)
-                
-                # Only include the tone in results if it contains matching models, 
-                # OR if no model data is present, fallback to platform/gear-based matching.
-                if valid_models:
-                    # Update the tone object's models array with the filtered results
-                    tone["models"] = valid_models
-                    filtered_results.append(tone)
-                elif not models_list:
-                    # Fallback for search payloads that don't include nested model details
-                    platform_val = str(tone.get("platform", "")).lower()
-                    gear_val = str(tone.get("gear", "")).lower()
-                    
-                    if selected_type in ["Full Rig", "DI / Amp"]:
-                        if platform_val == "nam" or any(x in gear_val for x in ["amp", "pedal", "full-rig"]):
-                            filtered_results.append(tone)
-                    elif selected_type == "IR (Cab)":
-                        if platform_val in ["ir", "wav"] or "ir" in gear_val:
-                            filtered_results.append(tone)
+                if selected_type in ["Full Rig", "DI / Amp"]:
+                    if platform_val == "nam" or any(x in gear_val for x in ["amp", "pedal", "full-rig"]):
+                        filtered_results.append(tone)
+                elif selected_type == "IR (Cab)":
+                    if platform_val in ["ir", "wav"] or "ir" in gear_val:
+                        filtered_results.append(tone)
 
             print(f"DEBUG: Processed {len(filtered_results)} valid filtered results.")
             self.after(0, lambda: self.display_search_results(filtered_results))
@@ -1033,6 +997,13 @@ class PMNamConverter(ctk.CTk):
         self.update_status(f"Loaded {target}: {os.path.basename(file_path)}", "#44ff44")
 
 
+    def update_gain_and_warning(self, value):
+        self.gain_db.set(value)
+        if value >= 12:
+            self.high_gain_warning.pack(pady=(0, 10))
+        else:
+            self.high_gain_warning.pack_forget()
+
     # --- Core Processor Logic ---
     def select_file(self):
         file_path = filedialog.askopenfilename(
@@ -1095,6 +1066,11 @@ class PMNamConverter(ctk.CTk):
             
             data["weights"] = modified_weights
             self.after(0, lambda: self.progress_bar.set(0.85))
+
+            # Metadata Injection
+            if "metadata" not in data:
+                data["metadata"] = {}
+            data["metadata"]["output_level_dbu"] = gain_db
 
             base_name, extension = os.path.splitext(file_path)
             new_file_path = f"{base_name}_+{gain_db}dB{extension}"

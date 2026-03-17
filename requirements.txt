@@ -7,4 +7,5 @@ numpy
 Pillow
 qrcode
 torch
-nam
+neural-amp-modeler
+python-dotenv

@@ -1,10 +1,14 @@
 import requests
 import json
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 API_BASE_URL = "https://www.tone3000.com/api/v1"
 API_AUTH_URL = f"{API_BASE_URL}/auth/session"
 API_SEARCH_URL = f"{API_BASE_URL}/tones/search"
-TONE3000_API_KEY = "b57ae63a-f178-4d28-b5a2-a7c4a3fb6414"
+TONE3000_API_KEY = os.getenv("TONE3000_API_KEY")
 
 def test_search():
     auth_payload = {"api_key": TONE3000_API_KEY}
