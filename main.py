@@ -225,6 +225,7 @@ def bake_worker(di_path, ir_path, input_wav_path, gain_db, output_dir, model_nam
 
         # Prevent mathematical wrapping and write safely
         output_audio = np.clip(final_target_audio, -1.0, 1.0)
+        temp_target_path = os.path.join(output_dir, "baker_target_tmp.wav")
         sf.write(temp_target_path, output_audio, rate, subtype='PCM_16')
 
         # Phase 4.5: The Retraining Loop
