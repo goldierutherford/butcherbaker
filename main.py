@@ -270,6 +270,7 @@ class PMNamConverter(ctk.CTk):
             fg_color="#F4EBD9", text_color="#2A1A10", border_color="#8B6D3B"
         )
         self.search_entry.pack(fill="x", pady=(0, 10))
+        self.search_entry.bind("<Return>", lambda event: self.start_search_thread())
 
         self.filter_frame = ctk.CTkFrame(self.search_input_frame, fg_color="transparent")
         self.filter_frame.pack(fill="x", pady=5)
@@ -762,20 +763,21 @@ class PMNamConverter(ctk.CTk):
 
     def search_tone3000_task(self, query):
         try:
-            # Phase 1: Authentication / Session Exchange
-            self.after(0, lambda: self.update_status("Authenticating with Tone3000...", "#ffcc00"))
-            
-            auth_payload = {"api_key": TONE3000_API_KEY}
-            auth_response = requests.post(API_AUTH_URL, json=auth_payload, timeout=10)
-            
-            if auth_response.status_code != 200:
-                self.after(0, lambda: self.update_status("Authentication Failed: Check API Key", "#ff4d4d"))
-                return
-            
-            self.access_token = auth_response.json().get("access_token")
+            # Phase 1: Cached Authentication
             if not self.access_token:
-                self.after(0, lambda: self.update_status("Auth Failed: No token received", "#ff4d4d"))
-                return
+                self.after(0, lambda: self.update_status("Authenticating with Tone3000...", "#ffcc00"))
+                
+                auth_payload = {"api_key": TONE3000_API_KEY}
+                auth_response = requests.post(API_AUTH_URL, json=auth_payload, timeout=10)
+                
+                if auth_response.status_code != 200:
+                    self.after(0, lambda: self.update_status("Authentication Failed: Check API Key", "#ff4d4d"))
+                    return
+                
+                self.access_token = auth_response.json().get("access_token")
+                if not self.access_token:
+                    self.after(0, lambda: self.update_status("Auth Failed: No token received", "#ff4d4d"))
+                    return
 
             # Phase 2: GET Search Request
             selected_type = self.gear_filter.get()
@@ -838,6 +840,7 @@ class PMNamConverter(ctk.CTk):
             msg = "Error: Connection failed."
             if hasattr(e, 'response') and e.response is not None:
                 if e.response.status_code == 401:
+                    self.access_token = None
                     msg = "Authentication Failed: Check API Key"
             self.after(0, lambda: self.update_status(msg, "#ff4d4d"))
         except Exception as e:
@@ -861,7 +864,8 @@ class PMNamConverter(ctk.CTk):
 
         self.update_status(f"Found {len(results)} rigs.", "#888888")
         
-        for item in results:
+        # Limit to top 25 results for UI performance
+        for item in results[:25]:
             if not isinstance(item, dict): continue
             
             # Main result container
