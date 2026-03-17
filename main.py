@@ -278,6 +278,8 @@ class PMNamConverter(ctk.CTk):
         self.baker_di_path = ctk.StringVar(value="No DI model selected")
         self.baker_ir_path = ctk.StringVar(value="No IR cabinet selected")
         self.baker_gain_db = ctk.IntVar(value=0)
+        self.baker_di_display = ctk.StringVar(value="No DI model selected")
+        self.baker_ir_display = ctk.StringVar(value="No Cabinet IR selected")
         
         # Search Filters
         self.gear_filter = ctk.StringVar(value="Full Rig")
@@ -314,6 +316,7 @@ class PMNamConverter(ctk.CTk):
         self.header_label = ctk.CTkLabel(
             self, text="PM NAM CONVERTER", 
             text_color=TWEED_TEXT,
+            fg_color="transparent",
             font=ctk.CTkFont(size=32, weight="bold", family="Century Schoolbook")
         )
         self.header_label.pack(pady=(25, 15))
@@ -670,53 +673,64 @@ class PMNamConverter(ctk.CTk):
             self.update_status("Postman station closed.", "#888888")
 
     def setup_baker_ui(self):
-        # Description
+        # Description (Fixed transparency and wraplength)
         self.baker_desc = ctk.CTkLabel(
             self.baker_tab, 
             text="Simulate professional re-amping. Process a DI NAM model through a Cabinet IR and bake a new Full Rig.",
-            wraplength=700, font=ctk.CTkFont(size=13, slant="italic")
+            wraplength=550, font=ctk.CTkFont(size=13, slant="italic"), fg_color="transparent", text_color=TWEED_TEXT
         )
-        self.baker_desc.pack(pady=15)
+        self.baker_desc.pack(pady=(10, 15))
 
-        # Selection Frame (Oxblood Panel)
+        # Selection Frame (Oxblood Faceplate)
         self.selection_frame = ctk.CTkFrame(self.baker_tab, corner_radius=15, fg_color=OXBLOOD_PANEL, border_width=4, border_color="#222222")
-        self.selection_frame.pack(padx=20, pady=10, fill="both", expand=True)
+        self.selection_frame.pack(padx=20, pady=5, fill="both", expand=True)
 
-        # Tube Display Area
-        self.tube_frame = ctk.CTkFrame(self.selection_frame, fg_color="transparent")
-        self.tube_frame.pack(pady=(15, 0))
-        self.baker_tube = VacuumTube(self.tube_frame, bg=OXBLOOD_PANEL)
-        self.baker_tube.pack()
-
-        # DI Model Selection
-        ctk.CTkLabel(self.selection_frame, text="Step 1: Select DI Model (.nam)", font=ctk.CTkFont(weight="bold")).pack(pady=(15, 5))
-        self.di_label = ctk.CTkLabel(self.selection_frame, textvariable=self.baker_di_path, font=ctk.CTkFont(size=11), text_color="#aaaaaa")
-        self.di_label.pack(pady=2)
-        ctk.CTkButton(self.selection_frame, text="Choose DI NAM", command=self.choose_baker_di, fg_color="#3d3d3d").pack(pady=5)
-
-        # Cabinet IR Selection
-        ctk.CTkLabel(self.selection_frame, text="Step 2: Select Cabinet IR (.wav)", font=ctk.CTkFont(weight="bold")).pack(pady=(15, 5))
-        self.ir_label = ctk.CTkLabel(self.selection_frame, textvariable=self.baker_ir_path, font=ctk.CTkFont(size=11), text_color="#aaaaaa")
-        self.ir_label.pack(pady=2)
-        ctk.CTkButton(self.selection_frame, text="Choose IR Wav", command=self.choose_baker_ir, fg_color="#3d3d3d").pack(pady=5)
-
-        # Gain Selection
-        ctk.CTkLabel(self.selection_frame, text="Step 3: Extra Gain Staging", font=ctk.CTkFont(weight="bold")).pack(pady=(15, 5))
-        self.baker_radio_frame = ctk.CTkFrame(self.selection_frame, fg_color="transparent")
-        self.baker_radio_frame.pack(pady=5)
+        # Step 1: DI Section
+        di_frame = ctk.CTkFrame(self.selection_frame, fg_color="transparent")
+        di_frame.pack(fill="x", padx=30, pady=(20, 10))
+        ctk.CTkLabel(di_frame, text="Step 1: Select DI Model (.nam)", font=ctk.CTkFont(weight="bold", size=15), text_color=PANEL_TEXT).pack(anchor="w")
         
-        ctk.CTkRadioButton(self.baker_radio_frame, text="+0dB", variable=self.baker_gain_db, value=0).pack(side="left", padx=20)
-        ctk.CTkRadioButton(self.baker_radio_frame, text="+3dB", variable=self.baker_gain_db, value=3).pack(side="left", padx=20)
-        ctk.CTkRadioButton(self.baker_radio_frame, text="+6dB", variable=self.baker_gain_db, value=6).pack(side="left", padx=20)
+        di_inner = ctk.CTkFrame(di_frame, fg_color="transparent")
+        di_inner.pack(fill="x", pady=(5, 0))
+        ctk.CTkButton(di_inner, text="Choose DI", width=120, command=self.choose_baker_di, fg_color="#5A2E2A", hover_color="#7A3E38", text_color=PANEL_TEXT).pack(side="left")
+        ctk.CTkLabel(di_inner, textvariable=self.baker_di_display, font=ctk.CTkFont(size=13, family="Courier"), text_color="#A8A8A8", anchor="w").pack(side="left", padx=15, fill="x", expand=True)
 
-        # Bake Button
+        # Step 2: IR Section
+        ir_frame = ctk.CTkFrame(self.selection_frame, fg_color="transparent")
+        ir_frame.pack(fill="x", padx=30, pady=10)
+        ctk.CTkLabel(ir_frame, text="Step 2: Select Cabinet IR (.wav)", font=ctk.CTkFont(weight="bold", size=15), text_color=PANEL_TEXT).pack(anchor="w")
+        
+        ir_inner = ctk.CTkFrame(ir_frame, fg_color="transparent")
+        ir_inner.pack(fill="x", pady=(5, 0))
+        ctk.CTkButton(ir_inner, text="Choose IR", width=120, command=self.choose_baker_ir, fg_color="#5A2E2A", hover_color="#7A3E38", text_color=PANEL_TEXT).pack(side="left")
+        ctk.CTkLabel(ir_inner, textvariable=self.baker_ir_display, font=ctk.CTkFont(size=13, family="Courier"), text_color="#A8A8A8", anchor="w").pack(side="left", padx=15, fill="x", expand=True)
+
+        # Step 3: Gain Selection
+        gain_frame = ctk.CTkFrame(self.selection_frame, fg_color="transparent")
+        gain_frame.pack(fill="x", padx=30, pady=(10, 20))
+        ctk.CTkLabel(gain_frame, text="Step 3: Extra Gain Staging", font=ctk.CTkFont(weight="bold", size=15), text_color=PANEL_TEXT).pack(anchor="w")
+        
+        self.baker_radio_frame = ctk.CTkFrame(gain_frame, fg_color="transparent")
+        self.baker_radio_frame.pack(anchor="w", pady=(5, 0))
+        
+        for val in [0, 3, 6]:
+            ctk.CTkRadioButton(self.baker_radio_frame, text=f"+{val}dB", variable=self.baker_gain_db, value=val, 
+                               fg_color="#8d1f1f", hover_color="#ba2b2b", text_color=PANEL_TEXT).pack(side="left", padx=(0, 30))
+
+        # Action Area (Button + Tube)
+        action_frame = ctk.CTkFrame(self.selection_frame, fg_color="transparent")
+        action_frame.pack(fill="x", padx=30, pady=(10, 30))
+        
+        self.baker_tube = VacuumTube(action_frame, bg=OXBLOOD_PANEL)
+        self.baker_tube.pack(side="left", padx=(0, 20))
+        
         self.bake_button = ctk.CTkButton(
-            self.baker_tab, text="BAKE NEW FULL RIG", 
-            font=ctk.CTkFont(size=20, weight="bold"), 
-            height=55, fg_color="#8d1f1f", hover_color="#ba2b2b",
+            action_frame, text="BAKE NEW FULL RIG", 
+            font=ctk.CTkFont(size=20, weight="bold", family="Century Schoolbook"), 
+            height=65, fg_color="#8d1f1f", hover_color="#ba2b2b", text_color=PANEL_TEXT,
             command=self.start_baking
         )
-        self.bake_button.pack(pady=20, fill="x", padx=50)
+        self.bake_button.pack(side="left", fill="x", expand=True)
 
     # --- Assets Management ---
     def ensure_assets(self):
@@ -742,22 +756,16 @@ class PMNamConverter(ctk.CTk):
 
     # --- Baker UI Logic ---
     def choose_baker_di(self):
-        path = filedialog.askopenfilename(
-            initialdir=DI_DIR,
-            title="Select DI .nam File", 
-            filetypes=[("NAM Files", "*.nam")]
-        )
+        path = filedialog.askopenfilename(filetypes=[("NAM Files", "*.nam")])
         if path:
             self.baker_di_path.set(path)
+            self.baker_di_display.set(os.path.basename(path))
 
     def choose_baker_ir(self):
-        path = filedialog.askopenfilename(
-            initialdir=IR_DIR,
-            title="Select Cabinet IR .wav", 
-            filetypes=[("Wav Files", "*.wav")]
-        )
+        path = filedialog.askopenfilename(filetypes=[("Wav Files", "*.wav")])
         if path:
             self.baker_ir_path.set(path)
+            self.baker_ir_display.set(os.path.basename(path))
 
     def start_baking(self):
         di = self.baker_di_path.get()
