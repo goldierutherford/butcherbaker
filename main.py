@@ -548,26 +548,18 @@ class PMNamConverter(ctk.CTk):
                         {% for file in file_list %}
                             <li>
                                 <span style="word-break: break-all; text-align: left; padding-right: 10px; font-size: 0.9em;">{{ file }}</span>
-                                <a href="/download/{{ category }}/{{ file }}" class="btn" style="padding: 8px 15px;">GET</a>
+                                <div style="display: flex; gap: 5px;">
+                                    <a href="/download/{{ category }}/{{ file }}" class="btn" style="padding: 8px 15px;">GET</a>
+                                    <form action="/delete/{{ category }}/{{ file }}" method="POST" style="margin: 0; padding: 0;">
+                                        <button type="submit" class="btn" style="padding: 8px 12px; background: #8d1f1f;" onclick="return confirm('Delete {{ file }}?')">X</button>
+                                    </form>
+                                </div>
                             </li>
                         {% else %}
                             <li style="color: #888; font-style: italic; justify-content: center;">Empty</li>
                         {% endfor %}
                     </ul>
                 {% endfor %}
-            </div>
-            <div class="card">
-                <h3>Baked Rigs (.nam)</h3>
-                <ul>
-                    {% for file in baked_files %}
-                        <li>
-                            <span style="word-break: break-all; text-align: left; padding-right: 10px; font-size: 0.9em;">{{ file }}</span>
-                            <a href="/download_baked/{{ file }}" class="btn">GET</a>
-                        </li>
-                    {% else %}
-                        <li style="color: #888; font-style: italic; justify-content: center;">No baked rigs yet</li>
-                    {% endfor %}
-                </ul>
             </div>
         </body>
         </html>
@@ -579,10 +571,10 @@ class PMNamConverter(ctk.CTk):
             categorized_files = {
                 "Full_Rigs": [f for f in os.listdir(RIGS_DIR) if os.path.isfile(os.path.join(RIGS_DIR, f)) and f.endswith('.nam')],
                 "DI_Amps": [f for f in os.listdir(DI_DIR) if os.path.isfile(os.path.join(DI_DIR, f)) and f.endswith('.nam')],
-                "Cabinet_IRs": [f for f in os.listdir(IR_DIR) if os.path.isfile(os.path.join(IR_DIR, f)) and f.endswith('.wav')]
+                "Cabinet_IRs": [f for f in os.listdir(IR_DIR) if os.path.isfile(os.path.join(IR_DIR, f)) and f.endswith('.wav')],
+                "Baked_Rigs": [f for f in os.listdir(BAKED_DIR) if f.endswith('.nam')] if os.path.exists(BAKED_DIR) else []
             }
-            baked_files = [f for f in os.listdir(BAKED_DIR) if f.endswith('.nam')] if os.path.exists(BAKED_DIR) else []
-            return render_template_string(HTML_TEMPLATE, categorized_files=categorized_files, baked_files=baked_files, msg=msg)
+            return render_template_string(HTML_TEMPLATE, categorized_files=categorized_files, msg=msg)
 
         @app.route('/upload', methods=['POST'])
         def upload_file():
@@ -618,7 +610,8 @@ class PMNamConverter(ctk.CTk):
             folder_map = {
                 "Full_Rigs": RIGS_DIR,
                 "DI_Amps": DI_DIR,
-                "Cabinet_IRs": IR_DIR
+                "Cabinet_IRs": IR_DIR,
+                "Baked_Rigs": BAKED_DIR
             }
             
             if folder not in folder_map:
@@ -627,18 +620,36 @@ class PMNamConverter(ctk.CTk):
             target_dir = folder_map[folder]
             
             # Strict extension check based on folder
-            if folder in ["Full_Rigs", "DI_Amps"] and not filename.endswith('.nam'):
+            if folder in ["Full_Rigs", "DI_Amps", "Baked_Rigs"] and not filename.endswith('.nam'):
                 return "Unauthorized file type", 403
             if folder == "Cabinet_IRs" and not filename.endswith('.wav'):
                 return "Unauthorized file type", 403
                 
             return send_from_directory(target_dir, filename)
 
-        @app.route('/download_baked/<filename>')
-        def download_baked_file(filename):
-            if not filename.endswith('.nam'):
-                return "Unauthorized", 403
-            return send_from_directory(BAKED_DIR, filename)
+        @app.route('/delete/<folder>/<filename>', methods=['POST'])
+        def delete_file(folder, filename):
+            folder_map = {
+                "Full_Rigs": RIGS_DIR,
+                "DI_Amps": DI_DIR,
+                "Cabinet_IRs": IR_DIR,
+                "Baked_Rigs": BAKED_DIR
+            }
+            if folder not in folder_map:
+                return "Invalid directory", 403
+                
+            target_dir = folder_map[folder]
+            file_path = os.path.join(target_dir, filename)
+            
+            try:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                    return f"<html><script>window.location.href='/?msg=Deleted {filename}';</script></html>"
+                else:
+                    return f"<html><script>window.location.href='/?msg=File not found';</script></html>"
+            except Exception as e:
+                return f"<html><script>window.location.href='/?msg=Error deleting file';</script></html>"
+
 
         return app
 
