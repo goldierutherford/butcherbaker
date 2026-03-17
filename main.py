@@ -575,8 +575,8 @@ class PMNamConverter(ctk.CTk):
             qr.make(fit=True)
             img = qr.make_image(fill_color="black", back_color="white")
             
-            # Convert to PhotoImage for Tkinter
-            self.qr_img = ImageTk.PhotoImage(img)
+            # Convert to CTkImage for High-DPI scaling
+            self.qr_img = ctk.CTkImage(light_image=img, dark_image=img, size=(180, 180))
             self.qr_label.configure(image=self.qr_img, text="")
             
             self.transfer_toggle.configure(text="STOP WI-FI TRANSFER", fg_color="#8d1f1f", hover_color="#ba2b2b")
