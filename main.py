@@ -17,6 +17,7 @@ import qrcode
 from PIL import Image, ImageTk
 from tkinter import filedialog
 from dotenv import load_dotenv
+import torchaudio
 
 # Load environment variables
 load_dotenv()
@@ -188,10 +189,9 @@ def bake_worker(di_path, ir_path, input_wav_path, gain_db, output_dir, model_nam
         from nam.train.core import train
 
         queue.put(("status", "Phase 4.1: Preparing Audio Sweep..."))
-        # Phase 4.1: Audio Preparation
-        rate, input_audio = wav.read(input_wav_path)
-        if input_audio.dtype != np.float32:
-            input_audio = input_audio.astype(np.float32) / (2**15 if input_audio.dtype == np.int16 else 2**31)
+        # Safely load audio natively via PyTorch to prevent integer blowout
+        input_tensor, rate = torchaudio.load(input_wav_path)
+        input_audio = input_tensor[0].numpy() # Convert to 1D mono numpy array
         
         # Phase 4.2: Inference (The DI Amp)
         queue.put(("status", "Phase 4.2: Running DI Model Inference..."))
@@ -211,11 +211,8 @@ def bake_worker(di_path, ir_path, input_wav_path, gain_db, output_dir, model_nam
 
         # Phase 4.3: DSP Convolution (The Cabinet IR)
         queue.put(("status", "Phase 4.3: Convolving Cabinet IR..."))
-        ir_rate, ir_audio = wav.read(ir_path)
-        if ir_audio.dtype != np.float32:
-            ir_audio = ir_audio.astype(np.float32) / (2**15 if ir_audio.dtype == np.int16 else 2**31)
-        if len(ir_audio.shape) > 1:
-            ir_audio = ir_audio[:, 0] # Mono conversion
+        ir_tensor, _ = torchaudio.load(ir_path)
+        ir_audio = ir_tensor[0].numpy()
             
         convolved_audio = fftconvolve(amp_output_audio, ir_audio, mode='same')
 
@@ -224,9 +221,9 @@ def bake_worker(di_path, ir_path, input_wav_path, gain_db, output_dir, model_nam
         multiplier = math.pow(10, gain_db / 20.0)
         final_target_audio = np.clip(convolved_audio * multiplier, -1.0, 1.0)
 
-        # Preparation for Retraining
-        temp_target_path = os.path.join(output_dir, "baker_target_tmp.wav")
-        wav.write(temp_target_path, rate, (final_target_audio * 32767).astype(np.int16))
+        # Prevent mathematical wrapping and write safely
+        final_target_audio = np.clip(final_target_audio, -1.0, 1.0)
+        wav.write(temp_target_path, rate, final_target_audio.astype(np.float32))
 
         # Phase 4.5: The Retraining Loop
         queue.put(("status", "Phase 4.5: Retraining Full Rig Neural Model..."))
@@ -667,7 +664,7 @@ class PMNamConverter(ctk.CTk):
             
             self.server_status_label.configure(text="POSTAL STATUS: Offline", text_color="#ff4d4d")
             self.server_url_label.configure(text="URL: ---")
-            self.qr_label.configure(image="", text="")
+            self.qr_label.configure(image=None, text="")
             self.qr_img = None
             self.transfer_toggle.configure(text="START WI-FI TRANSFER", fg_color="#1f538d", hover_color="#2b71ba")
             self.update_status("Postman station closed.", "#888888")
