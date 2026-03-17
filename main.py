@@ -18,6 +18,8 @@ from PIL import Image, ImageTk
 from tkinter import filedialog
 from dotenv import load_dotenv
 import soundfile as sf
+import sys
+import re
 
 # Load environment variables
 load_dotenv()
@@ -178,6 +180,29 @@ class VacuumTube(ctk.CTkCanvas):
         self.draw_tube()
         self.after(50, self.animate_glow) # 50ms = smooth 20fps animation
 
+class ProgressInterceptor:
+    """Intercepts stdout/stderr to parse PyTorch Lightning epoch progress."""
+    def __init__(self, original_stream, queue):
+        self.original_stream = original_stream
+        self.queue = queue
+        # Regex to match the 'Epoch 12/99' console output
+        self.epoch_pattern = re.compile(r'Epoch (\d+)/(\d+)')
+
+    def write(self, text):
+        # Always pass the text to the real terminal so logs still appear
+        self.original_stream.write(text)
+        
+        # Check for epoch progress in this chunk of text
+        match = self.epoch_pattern.search(text)
+        if match:
+            current = int(match.group(1))
+            total = int(match.group(2))
+            if total > 0:
+                self.queue.put(("progress", current / total))
+    
+    def flush(self):
+        self.original_stream.flush()
+
 def bake_worker(di_path, ir_path, input_wav_path, output_dir, model_name, queue):
     """
     Isolated process for the Baker Engine pipeline.
@@ -227,16 +252,27 @@ def bake_worker(di_path, ir_path, input_wav_path, output_dir, model_name, queue)
         # Phase 4.5: The Retraining Loop
         queue.put(("status", "Phase 4.5: Retraining Full Rig Neural Model..."))
         
-        # The trainer will create {model_name}.nam in output_dir
-        train(
-            input_wav_path,    # source
-            temp_target_path,  # target
-            output_dir,        # export dir
-            epochs=100,        # standard for re-bake
-            architecture="standard",
-            modelname=model_name,
-            silent=True
-        )
+        # Wiretap the terminal output
+        original_stdout = sys.stdout
+        original_stderr = sys.stderr
+        sys.stdout = ProgressInterceptor(original_stdout, queue)
+        sys.stderr = ProgressInterceptor(original_stderr, queue)
+        
+        try:
+            # The trainer will create {model_name}.nam in output_dir
+            train(
+                input_wav_path,    # source
+                temp_target_path,  # target
+                output_dir,        # export dir
+                epochs=100,        # standard for re-bake
+                architecture="standard",
+                modelname=model_name,
+                silent=False       # MUST be False to generate console output
+            )
+        finally:
+            # ALWAYS restore the original terminal streams
+            sys.stdout = original_stdout
+            sys.stderr = original_stderr
 
         # Finalize
         if os.path.exists(temp_target_path):
@@ -835,6 +871,9 @@ class PMNamConverter(ctk.CTk):
                 msg_type, content = self.baker_queue.get_nowait()
                 if msg_type == "status":
                     self.update_status(content, "#ffcc00")
+                elif msg_type == "progress":
+                    # Smoothly update the Tkinter progress bar
+                    self.progress_bar.set(content)
                 elif msg_type == "success":
                     self.update_status(content, "#44ff44")
                     self.bake_button.configure(state="normal", text="BAKE NEW FULL RIG")
