@@ -178,7 +178,7 @@ class VacuumTube(ctk.CTkCanvas):
         self.draw_tube()
         self.after(50, self.animate_glow) # 50ms = smooth 20fps animation
 
-def bake_worker(di_path, ir_path, input_wav_path, gain_db, output_dir, model_name, queue):
+def bake_worker(di_path, ir_path, input_wav_path, output_dir, model_name, queue):
     """
     Isolated process for the Baker Engine pipeline.
     Handles Phase 4.1 to 4.5.
@@ -219,13 +219,8 @@ def bake_worker(di_path, ir_path, input_wav_path, gain_db, output_dir, model_nam
         # Use mode='full' and slice to preserve the initial trigger spike
         convolved_audio = fftconvolve(amp_output_audio, ir_audio, mode='full')[:len(amp_output_audio)]
 
-        # Phase 4.4: Gain Staging
-        queue.put(("status", "Phase 4.4: Applying Gain Staging..."))
-        multiplier = math.pow(10, gain_db / 20.0)
-        final_target_audio = np.clip(convolved_audio * multiplier, -1.0, 1.0)
-
-        # Limit mathematical wrapping below the NAM validation threshold
-        output_audio = np.clip(final_target_audio, -0.99, 0.99)
+        # Prevent mathematical wrapping below the NAM validation threshold
+        output_audio = np.clip(convolved_audio, -0.99, 0.99)
         temp_target_path = os.path.join(output_dir, "baker_target_tmp.wav")
         sf.write(temp_target_path, output_audio, rate, subtype='PCM_16')
 
@@ -281,7 +276,6 @@ class PMNamConverter(ctk.CTk):
         # Baker Variables
         self.baker_di_path = ctk.StringVar(value="No DI model selected")
         self.baker_ir_path = ctk.StringVar(value="No IR cabinet selected")
-        self.baker_gain_db = ctk.IntVar(value=0)
         self.baker_di_display = ctk.StringVar(value="No DI model selected")
         self.baker_ir_display = ctk.StringVar(value="No Cabinet IR selected")
         
@@ -729,18 +723,6 @@ class PMNamConverter(ctk.CTk):
         ctk.CTkButton(ir_inner, text="Choose IR", width=120, command=self.choose_baker_ir, fg_color="#5A2E2A", hover_color="#7A3E38", text_color=PANEL_TEXT).pack(side="left")
         ctk.CTkLabel(ir_inner, textvariable=self.baker_ir_display, font=ctk.CTkFont(size=13, family="Courier"), text_color="#A8A8A8", anchor="w").pack(side="left", padx=15, fill="x", expand=True)
 
-        # Step 3: Gain Selection
-        gain_frame = ctk.CTkFrame(self.selection_frame, fg_color="transparent")
-        gain_frame.pack(fill="x", padx=30, pady=(10, 20))
-        ctk.CTkLabel(gain_frame, text="Step 3: Extra Gain Staging", font=ctk.CTkFont(weight="bold", size=15), text_color=PANEL_TEXT).pack(anchor="w")
-        
-        self.baker_radio_frame = ctk.CTkFrame(gain_frame, fg_color="transparent")
-        self.baker_radio_frame.pack(anchor="w", pady=(5, 0))
-        
-        for val in [0, 3, 6]:
-            ctk.CTkRadioButton(self.baker_radio_frame, text=f"+{val}dB", variable=self.baker_gain_db, value=val, 
-                               fg_color="#8d1f1f", hover_color="#ba2b2b", text_color=PANEL_TEXT).pack(side="left", padx=(0, 30))
-
         # Action Area (Button + Tube)
         action_frame = ctk.CTkFrame(self.selection_frame, fg_color="transparent")
         action_frame.pack(fill="x", padx=30, pady=(10, 30))
@@ -829,7 +811,7 @@ class PMNamConverter(ctk.CTk):
         # Start the Baker Process
         self.baker_process = multiprocessing.Process(
             target=bake_worker, 
-            args=(di, ir, INPUT_WAV_PATH, self.baker_gain_db.get(), output_dir, model_name, self.baker_queue)
+            args=(di, ir, INPUT_WAV_PATH, output_dir, model_name, self.baker_queue)
         )
         self.baker_process.start()
         
