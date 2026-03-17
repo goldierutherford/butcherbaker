@@ -17,7 +17,7 @@ import qrcode
 from PIL import Image, ImageTk
 from tkinter import filedialog
 from dotenv import load_dotenv
-import torchaudio
+import soundfile as sf
 
 # Load environment variables
 load_dotenv()
@@ -188,10 +188,10 @@ def bake_worker(di_path, ir_path, input_wav_path, gain_db, output_dir, model_nam
         from nam.models._from_nam import init_from_nam
         from nam.train.core import train
 
-        queue.put(("status", "Phase 4.1: Preparing Audio Sweep..."))
-        # Safely load audio natively via PyTorch to prevent integer blowout
-        input_tensor, rate = torchaudio.load(input_wav_path)
-        input_audio = input_tensor[0].numpy() # Convert to 1D mono numpy array
+        # Safely load audio natively as normalized float32
+        input_audio, rate = sf.read(input_wav_path, dtype='float32')
+        if len(input_audio.shape) > 1:
+            input_audio = input_audio[:, 0] # Mono conversion
         
         # Phase 4.2: Inference (The DI Amp)
         queue.put(("status", "Phase 4.2: Running DI Model Inference..."))
@@ -211,8 +211,9 @@ def bake_worker(di_path, ir_path, input_wav_path, gain_db, output_dir, model_nam
 
         # Phase 4.3: DSP Convolution (The Cabinet IR)
         queue.put(("status", "Phase 4.3: Convolving Cabinet IR..."))
-        ir_tensor, _ = torchaudio.load(ir_path)
-        ir_audio = ir_tensor[0].numpy()
+        ir_audio, ir_rate = sf.read(ir_path, dtype='float32')
+        if len(ir_audio.shape) > 1:
+            ir_audio = ir_audio[:, 0]
             
         convolved_audio = fftconvolve(amp_output_audio, ir_audio, mode='same')
 
@@ -222,8 +223,8 @@ def bake_worker(di_path, ir_path, input_wav_path, gain_db, output_dir, model_nam
         final_target_audio = np.clip(convolved_audio * multiplier, -1.0, 1.0)
 
         # Prevent mathematical wrapping and write safely
-        final_target_audio = np.clip(final_target_audio, -1.0, 1.0)
-        wav.write(temp_target_path, rate, final_target_audio.astype(np.float32))
+        output_audio = np.clip(final_target_audio, -1.0, 1.0)
+        sf.write(temp_target_path, output_audio, rate, subtype='PCM_16')
 
         # Phase 4.5: The Retraining Loop
         queue.put(("status", "Phase 4.5: Retraining Full Rig Neural Model..."))

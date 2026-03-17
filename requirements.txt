@@ -9,3 +9,4 @@ qrcode
 torch
 neural-amp-modeler
 python-dotenv
+soundfile
