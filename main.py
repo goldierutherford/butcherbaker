@@ -29,10 +29,11 @@ ctk.set_default_color_theme("blue")
 # Constants (Relative to script directory for reliability)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DOWNLOADS_DIR = os.path.normpath(os.path.join(SCRIPT_DIR, "downloads"))
+BAKED_DIR = os.path.normpath(os.path.join(DOWNLOADS_DIR, "Baked_Rigs"))
 RIGS_DIR = os.path.normpath(os.path.join(DOWNLOADS_DIR, "Full_Rigs"))
 DI_DIR = os.path.normpath(os.path.join(DOWNLOADS_DIR, "DI_Amps"))
 IR_DIR = os.path.normpath(os.path.join(DOWNLOADS_DIR, "Cabinet_IRs"))
-for d in [DOWNLOADS_DIR, RIGS_DIR, DI_DIR, IR_DIR]:
+for d in [DOWNLOADS_DIR, BAKED_DIR, RIGS_DIR, DI_DIR, IR_DIR]:
     os.makedirs(d, exist_ok=True)
 
 # API Configuration
@@ -559,6 +560,19 @@ class PMNamConverter(ctk.CTk):
                     </ul>
                 {% endfor %}
             </div>
+            <div class="card">
+                <h3>Baked Rigs (.nam)</h3>
+                <ul>
+                    {% for file in baked_files %}
+                        <li>
+                            <span style="word-break: break-all; text-align: left; padding-right: 10px; font-size: 0.9em;">{{ file }}</span>
+                            <a href="/download_baked/{{ file }}" class="btn">GET</a>
+                        </li>
+                    {% else %}
+                        <li style="color: #888; font-style: italic; justify-content: center;">No baked rigs yet</li>
+                    {% endfor %}
+                </ul>
+            </div>
         </body>
         </html>
         """
@@ -567,11 +581,12 @@ class PMNamConverter(ctk.CTk):
         def index():
             msg = request.args.get('msg')
             categorized_files = {
-                "Full_Rigs": [f for f in os.listdir(RIGS_DIR) if f.endswith('.nam')],
-                "DI_Amps": [f for f in os.listdir(DI_DIR) if f.endswith('.nam')],
-                "Cabinet_IRs": [f for f in os.listdir(IR_DIR) if f.endswith('.wav')]
+                "Full_Rigs": [f for f in os.listdir(RIGS_DIR) if os.path.isfile(os.path.join(RIGS_DIR, f)) and f.endswith('.nam')],
+                "DI_Amps": [f for f in os.listdir(DI_DIR) if os.path.isfile(os.path.join(DI_DIR, f)) and f.endswith('.nam')],
+                "Cabinet_IRs": [f for f in os.listdir(IR_DIR) if os.path.isfile(os.path.join(IR_DIR, f)) and f.endswith('.wav')]
             }
-            return render_template_string(HTML_TEMPLATE, categorized_files=categorized_files, msg=msg)
+            baked_files = [f for f in os.listdir(BAKED_DIR) if f.endswith('.nam')] if os.path.exists(BAKED_DIR) else []
+            return render_template_string(HTML_TEMPLATE, categorized_files=categorized_files, baked_files=baked_files, msg=msg)
 
         @app.route('/upload', methods=['POST'])
         def upload_file():
@@ -622,6 +637,12 @@ class PMNamConverter(ctk.CTk):
                 return "Unauthorized file type", 403
                 
             return send_from_directory(target_dir, filename)
+
+        @app.route('/download_baked/<filename>')
+        def download_baked_file(filename):
+            if not filename.endswith('.nam'):
+                return "Unauthorized", 403
+            return send_from_directory(BAKED_DIR, filename)
 
         return app
 
@@ -788,9 +809,7 @@ class PMNamConverter(ctk.CTk):
         base_name = os.path.basename(di).replace(".nam", "")
         ir_name = os.path.basename(ir).replace(".wav", "")
         model_name = f"{base_name}_{ir_name}_Baked"
-        output_dir = os.path.join(DOWNLOADS_DIR, "Baked_Rigs")
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
+        output_dir = BAKED_DIR
 
         # Multiprocessing Queue for status updates
         self.baker_queue = multiprocessing.Queue()
