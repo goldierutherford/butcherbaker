@@ -24,6 +24,31 @@ import re
 # Load environment variables
 load_dotenv()
 
+def create_tiled_background(window_width, window_height, pattern_path):
+    """Creates a tiled image to fill the given window dimensions."""
+    try:
+        pattern = Image.open(pattern_path)
+        pattern_width, pattern_height = pattern.size
+        
+        # Calculate how many full tiles are needed to cover the width and height
+        tiles_x = (window_width // pattern_width) + 1
+        tiles_y = (window_height // pattern_height) + 1
+        
+        # Create a new, transparent image to hold the tiled result
+        tiled_image = Image.new('RGBA', (window_width, window_height))
+        
+        # Paste the repeated pattern tiles perfectly, starting from the top-left
+        for i in range(tiles_x):
+            for j in range(tiles_y):
+                tiled_image.paste(pattern, (i * pattern_width, j * pattern_height))
+                
+        # Convert to a CTkImage for high-DPI scaling support
+        return ctk.CTkImage(light_image=tiled_image, dark_image=tiled_image, size=(window_width, window_height))
+        
+    except Exception as e:
+        print(f"DEBUG: Error creating tiled background: {e}")
+        return None
+
 # Appearance & Theme
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -50,7 +75,7 @@ if not os.path.exists(ASSETS_DIR):
     os.makedirs(ASSETS_DIR, exist_ok=True)
 INPUT_WAV_PATH = os.path.join(ASSETS_DIR, "input.wav")
 INPUT_WAV_URL = "https://raw.githubusercontent.com/sdatkinson/neural-amp-modeler/main/input.wav"
-TWEED_TEXTURE_PATH = os.path.join(ASSETS_DIR, "tweed.png")
+TWEED_PATTERN_PATH = os.path.join(ASSETS_DIR, "tweed_pattern_seamless.png")
 
 # Tweed Theme Constants
 TWEED_BG = "#D1A95F"       # Warm vintage tan
@@ -323,6 +348,9 @@ class PMNamConverter(ctk.CTk):
         
         # Audio Engine Setup
         self.after(500, self.ensure_assets)
+        
+        # Bind resize for tiled background
+        self.bind("<Configure>", self.update_background)
 
     def get_local_ip(self):
         """Utility to find the local IPv4 address on the Wi-Fi network."""
@@ -336,22 +364,31 @@ class PMNamConverter(ctk.CTk):
         except Exception:
             return "127.0.0.1"
 
+    def update_background(self, event=None):
+        """Dynamically updates the tiled background pattern on window resize."""
+        # Use current window dimensions, or fallback to default size
+        width = self.winfo_width() if self.winfo_width() > 1 else 1000
+        height = self.winfo_height() if self.winfo_height() > 1 else 700
+        
+        # Generate the seamless tiled CTkImage
+        self.bg_image_tiled = create_tiled_background(width, height, TWEED_PATTERN_PATH)
+        
+        if self.bg_image_tiled:
+            # Update the background label with the new tiled pattern
+            self.bg_label.configure(image=self.bg_image_tiled)
+
     def setup_ui(self):
-        # Load and place the textured background layer
-        if os.path.exists(TWEED_TEXTURE_PATH):
-            tweed_img = Image.open(TWEED_TEXTURE_PATH)
-            self.tweed_bg_image = ctk.CTkImage(light_image=tweed_img, dark_image=tweed_img, size=(1920, 1080))
-            self.bg_label = ctk.CTkLabel(self, image=self.tweed_bg_image, text="")
-            self.bg_label.place(x=0, y=0, relwidth=1, relheight=1)
-        else:
-            print("DEBUG: tweed.png not found in assets folder. Falling back to flat color.")
+        # Initial empty label for background, will be tiled on first resize/call
+        self.bg_label = ctk.CTkLabel(self, text="")
+        self.bg_label.place(x=0, y=0, relwidth=1, relheight=1)
 
         # Header
         self.header_label = ctk.CTkLabel(
-            self, text="PM NAM CONVERTER", 
+            self, 
+            text="Butcher | The Baker | The Postman", 
+            font=ctk.CTkFont(family="Century Schoolbook", size=26, weight="bold"),
             text_color=TWEED_TEXT,
-            fg_color="transparent",
-            font=ctk.CTkFont(size=32, weight="bold", family="Century Schoolbook")
+            fg_color="transparent" # Explicit transparency fix
         )
         self.header_label.pack(pady=(25, 15))
 
