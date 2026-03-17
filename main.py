@@ -75,7 +75,7 @@ if not os.path.exists(ASSETS_DIR):
     os.makedirs(ASSETS_DIR, exist_ok=True)
 INPUT_WAV_PATH = os.path.join(ASSETS_DIR, "input.wav")
 INPUT_WAV_URL = "https://raw.githubusercontent.com/sdatkinson/neural-amp-modeler/main/input.wav"
-TWEED_PATTERN_PATH = os.path.join(ASSETS_DIR, "tweed_pattern_seamless.png")
+TWEED_PATTERN_PATH = os.path.join(ASSETS_DIR, "tweed.png")
 
 # Tweed Theme Constants
 TWEED_BG = "#D1A95F"       # Warm vintage tan
@@ -352,6 +352,9 @@ class PMNamConverter(ctk.CTk):
         
         # Bind resize for tiled background
         self.bind("<Configure>", self.update_background)
+        
+        # Force initial background draw
+        self.after(100, self.update_background)
 
     def get_local_ip(self):
         """Utility to find the local IPv4 address on the Wi-Fi network."""
@@ -556,7 +559,7 @@ class PMNamConverter(ctk.CTk):
         self.server_url_label.pack(pady=10)
 
         # QR Code Display
-        self.qr_label = ctk.CTkLabel(self.postman_frame, text="", image=None)
+        self.qr_label = ctk.CTkLabel(self.postman_frame, text="", image="")
         self.qr_label.pack(pady=15)
 
         self.transfer_toggle = ctk.CTkButton(
@@ -770,7 +773,7 @@ class PMNamConverter(ctk.CTk):
             
             self.server_status_label.configure(text="POSTAL STATUS: Offline", text_color="#ff4d4d")
             self.server_url_label.configure(text="URL: ---")
-            self.qr_label.configure(image=None, text="")
+            self.qr_label.configure(image="", text="")
             self.qr_img = None
             self.transfer_toggle.configure(text="START WI-FI TRANSFER", fg_color="#1f538d", hover_color="#2b71ba")
             self.update_status("Postman station closed.", "#888888")
