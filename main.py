@@ -616,12 +616,20 @@ class PMNamConverter(ctk.CTk):
 
     # --- Baker UI Logic ---
     def choose_baker_di(self):
-        path = filedialog.askopenfilename(filetypes=[("NAM Files", "*.nam")])
+        path = filedialog.askopenfilename(
+            initialdir=DOWNLOADS_DIR,
+            title="Select DI .nam File", 
+            filetypes=[("NAM Files", "*.nam")]
+        )
         if path:
             self.baker_di_path.set(path)
 
     def choose_baker_ir(self):
-        path = filedialog.askopenfilename(filetypes=[("Wav Files", "*.wav")])
+        path = filedialog.askopenfilename(
+            initialdir=DOWNLOADS_DIR,
+            title="Select Cabinet IR .wav", 
+            filetypes=[("Wav Files", "*.wav")]
+        )
         if path:
             self.baker_ir_path.set(path)
 
@@ -1007,6 +1015,7 @@ class PMNamConverter(ctk.CTk):
     # --- Core Processor Logic ---
     def select_file(self):
         file_path = filedialog.askopenfilename(
+            initialdir=DOWNLOADS_DIR,
             title="Select .nam File",
             filetypes=[("Neural Amp Modeler Files", "*.nam"), ("JSON Files", "*.json"), ("All Files", "*.*")]
         )
