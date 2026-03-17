@@ -126,7 +126,11 @@ def bake_worker(di_path, ir_path, input_wav_path, gain_db, output_dir, model_nam
         
         # Phase 4.2: Inference (The DI Amp)
         queue.put(("status", "Phase 4.2: Running DI Model Inference..."))
-        di_model = init_from_nam(di_path)
+        # Load the NAM JSON dictionary first
+        with open(di_path, "r", encoding="utf-8") as f:
+            di_config = json.load(f)
+            
+        di_model = init_from_nam(di_config)
         input_tensor = torch.from_numpy(input_audio).view(1, -1)
         
         with torch.no_grad():
