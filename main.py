@@ -228,7 +228,7 @@ class ProgressInterceptor:
     def flush(self):
         self.original_stream.flush()
 
-def bake_worker(di_path, ir_path, input_wav_path, output_dir, model_name, queue):
+def bake_worker(di_path, ir_path, input_wav_path, output_dir, model_name, queue, epochs_to_run):
     """
     Isolated process for the Baker Engine pipeline.
     Handles Phase 4.1 to 4.5.
@@ -289,7 +289,7 @@ def bake_worker(di_path, ir_path, input_wav_path, output_dir, model_name, queue)
                 input_wav_path,    # source
                 temp_target_path,  # target
                 output_dir,        # export dir
-                epochs=100,        # standard for re-bake
+                epochs=epochs_to_run,        # dynamic for re-bake
                 architecture="standard",
                 modelname=model_name,
                 silent=False       # MUST be False to generate console output
@@ -339,6 +339,7 @@ class PMNamConverter(ctk.CTk):
         self.baker_ir_path = ctk.StringVar(value="No IR cabinet selected")
         self.baker_di_display = ctk.StringVar(value="No DI model selected")
         self.baker_ir_display = ctk.StringVar(value="No Cabinet IR selected")
+        self.baker_epochs = ctk.IntVar(value=15) # Default to Quick for CPU sanity
         
         # Search Filters
         self.gear_filter = ctk.StringVar(value="Full Rig")
@@ -807,6 +808,19 @@ class PMNamConverter(ctk.CTk):
         ctk.CTkButton(ir_inner, text="Choose IR", width=120, command=self.choose_baker_ir, fg_color="#5A2E2A", hover_color="#7A3E38", text_color=PANEL_TEXT).pack(side="left")
         ctk.CTkLabel(ir_inner, textvariable=self.baker_ir_display, font=ctk.CTkFont(size=13, family="Courier"), text_color="#A8A8A8", anchor="w").pack(side="left", padx=15, fill="x", expand=True)
 
+        # Quality Selection
+        quality_frame = ctk.CTkFrame(self.selection_frame, fg_color="transparent")
+        quality_frame.pack(fill="x", padx=30, pady=10)
+        ctk.CTkLabel(quality_frame, text="Step 3: Bake Quality", font=ctk.CTkFont(weight="bold", size=15), text_color=PANEL_TEXT).pack(anchor="w")
+        
+        quality_inner = ctk.CTkFrame(quality_frame, fg_color="transparent")
+        quality_inner.pack(anchor="w", pady=(5, 0))
+        
+        ctk.CTkRadioButton(quality_inner, text="Quick Toast (15 Epochs)", variable=self.baker_epochs, value=15, 
+                           fg_color="#8d1f1f", hover_color="#ba2b2b", text_color=PANEL_TEXT).pack(side="left", padx=(0, 20))
+        ctk.CTkRadioButton(quality_inner, text="Full Roast (99 Epochs)", variable=self.baker_epochs, value=99, 
+                           fg_color="#8d1f1f", hover_color="#ba2b2b", text_color=PANEL_TEXT).pack(side="left")
+
         # Action Area (Button + Tube)
         action_frame = ctk.CTkFrame(self.selection_frame, fg_color="transparent")
         action_frame.pack(fill="x", padx=30, pady=(10, 30))
@@ -895,7 +909,7 @@ class PMNamConverter(ctk.CTk):
         # Start the Baker Process
         self.baker_process = multiprocessing.Process(
             target=bake_worker, 
-            args=(di, ir, INPUT_WAV_PATH, output_dir, model_name, self.baker_queue)
+            args=(di, ir, INPUT_WAV_PATH, output_dir, model_name, self.baker_queue, self.baker_epochs.get())
         )
         self.baker_process.start()
         
