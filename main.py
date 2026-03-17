@@ -216,7 +216,8 @@ def bake_worker(di_path, ir_path, input_wav_path, gain_db, output_dir, model_nam
         if len(ir_audio.shape) > 1:
             ir_audio = ir_audio[:, 0]
             
-        convolved_audio = fftconvolve(amp_output_audio, ir_audio, mode='same')
+        # Use mode='full' and slice to preserve the initial trigger spike
+        convolved_audio = fftconvolve(amp_output_audio, ir_audio, mode='full')[:len(amp_output_audio)]
 
         # Phase 4.4: Gain Staging
         queue.put(("status", "Phase 4.4: Applying Gain Staging..."))
