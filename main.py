@@ -46,6 +46,7 @@ if not os.path.exists(ASSETS_DIR):
     os.makedirs(ASSETS_DIR, exist_ok=True)
 INPUT_WAV_PATH = os.path.join(ASSETS_DIR, "input.wav")
 INPUT_WAV_URL = "https://raw.githubusercontent.com/sdatkinson/neural-amp-modeler/main/input.wav"
+TWEED_TEXTURE_PATH = os.path.join(ASSETS_DIR, "tweed.png")
 
 # Tweed Theme Constants
 TWEED_BG = "#D1A95F"       # Warm vintage tan
@@ -230,6 +231,15 @@ class PMNamConverter(ctk.CTk):
             return "127.0.0.1"
 
     def setup_ui(self):
+        # Load and place the textured background layer
+        if os.path.exists(TWEED_TEXTURE_PATH):
+            tweed_img = Image.open(TWEED_TEXTURE_PATH)
+            self.tweed_bg_image = ctk.CTkImage(light_image=tweed_img, dark_image=tweed_img, size=(1920, 1080))
+            self.bg_label = ctk.CTkLabel(self, image=self.tweed_bg_image, text="")
+            self.bg_label.place(x=0, y=0, relwidth=1, relheight=1)
+        else:
+            print("DEBUG: tweed.png not found in assets folder. Falling back to flat color.")
+
         # Header
         self.header_label = ctk.CTkLabel(
             self, text="PM NAM CONVERTER", 
@@ -243,7 +253,7 @@ class PMNamConverter(ctk.CTk):
         self.main_layout.pack(fill="both", expand=True, padx=15, pady=(0, 15))
 
         # --- Sidebar: Tone3000 Search ---
-        self.sidebar = ctk.CTkFrame(self.main_layout, width=380, corner_radius=12, fg_color="#E5C78F", border_width=3, border_color="#8B6D3B")
+        self.sidebar = ctk.CTkFrame(self.main_layout, width=380, corner_radius=12, fg_color="transparent", border_width=3, border_color="#8B6D3B")
         self.sidebar.pack(side="left", fill="both", padx=(0, 15))
         self.sidebar.pack_propagate(False)
 
@@ -280,7 +290,7 @@ class PMNamConverter(ctk.CTk):
         self.search_button.pack(side="right")
 
         # Results Area
-        self.results_frame = ctk.CTkScrollableFrame(self.sidebar, fg_color="#D1A95F", scrollbar_button_color="#8B6D3B")
+        self.results_frame = ctk.CTkScrollableFrame(self.sidebar, fg_color="transparent", scrollbar_button_color="#8B6D3B")
         self.results_frame.pack(padx=12, pady=15, fill="both", expand=True)
         
         self.results_header_row = ctk.CTkFrame(self.results_frame, fg_color="#B38D4F", height=35)
@@ -294,7 +304,7 @@ class PMNamConverter(ctk.CTk):
 
         self.tabview = ctk.CTkTabview(
             self.content_area, corner_radius=12,
-            fg_color="#E5C78F", segmented_button_fg_color="#B38D4F",
+            fg_color="transparent", segmented_button_fg_color="#B38D4F",
             segmented_button_selected_color="#3B1C1A",
             segmented_button_selected_hover_color="#5A2E2A",
             text_color="#F4EBD9"
