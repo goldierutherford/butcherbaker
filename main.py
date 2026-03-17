@@ -779,16 +779,26 @@ class PMNamConverter(ctk.CTk):
 
     # --- Baker UI Logic ---
     def choose_baker_di(self):
-        path = filedialog.askopenfilename(filetypes=[("NAM Files", "*.nam")])
+        path = filedialog.askopenfilename(
+            initialdir=DI_DIR,
+            title="Select DI Model (.nam)",
+            filetypes=[("NAM Files", "*.nam")]
+        )
         if path:
             self.baker_di_path.set(path)
-            self.baker_di_display.set(os.path.basename(path))
+            if hasattr(self, 'baker_di_display'):
+                self.baker_di_display.set(os.path.basename(path))
 
     def choose_baker_ir(self):
-        path = filedialog.askopenfilename(filetypes=[("Wav Files", "*.wav")])
+        path = filedialog.askopenfilename(
+            initialdir=IR_DIR,
+            title="Select Cabinet IR (.wav)",
+            filetypes=[("Wav Files", "*.wav")]
+        )
         if path:
             self.baker_ir_path.set(path)
-            self.baker_ir_display.set(os.path.basename(path))
+            if hasattr(self, 'baker_ir_display'):
+                self.baker_ir_display.set(os.path.basename(path))
 
     def start_baking(self):
         di = self.baker_di_path.get()
