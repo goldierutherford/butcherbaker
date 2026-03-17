@@ -1,0 +1,10 @@
+flask
+werkzeug
+customtkinter
+requests
+scipy
+numpy
+Pillow
+qrcode
+torch
+nam

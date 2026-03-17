@@ -1,0 +1,2 @@
+['id', 'title', 'description', 'tags', 'makes', 'gear', 'models_count', 'favorites_count', 'downloads_count', 'created_at', 'updated_at', 'platform', 'images', 'user_id', 'user', 'url']
+NO MODELS
