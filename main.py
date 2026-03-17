@@ -224,8 +224,8 @@ def bake_worker(di_path, ir_path, input_wav_path, gain_db, output_dir, model_nam
         multiplier = math.pow(10, gain_db / 20.0)
         final_target_audio = np.clip(convolved_audio * multiplier, -1.0, 1.0)
 
-        # Prevent mathematical wrapping and write safely
-        output_audio = np.clip(final_target_audio, -1.0, 1.0)
+        # Limit mathematical wrapping below the NAM validation threshold
+        output_audio = np.clip(final_target_audio, -0.99, 0.99)
         temp_target_path = os.path.join(output_dir, "baker_target_tmp.wav")
         sf.write(temp_target_path, output_audio, rate, subtype='PCM_16')
 
