@@ -28,8 +28,11 @@ ctk.set_default_color_theme("blue")
 # Constants (Relative to script directory for reliability)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DOWNLOADS_DIR = os.path.normpath(os.path.join(SCRIPT_DIR, "downloads"))
-if not os.path.exists(DOWNLOADS_DIR):
-    os.makedirs(DOWNLOADS_DIR, exist_ok=True)
+RIGS_DIR = os.path.normpath(os.path.join(DOWNLOADS_DIR, "Full_Rigs"))
+DI_DIR = os.path.normpath(os.path.join(DOWNLOADS_DIR, "DI_Amps"))
+IR_DIR = os.path.normpath(os.path.join(DOWNLOADS_DIR, "Cabinet_IRs"))
+for d in [DOWNLOADS_DIR, RIGS_DIR, DI_DIR, IR_DIR]:
+    os.makedirs(d, exist_ok=True)
 
 # API Configuration
 TONE3000_API_KEY = os.getenv("TONE3000_API_KEY")
@@ -617,7 +620,7 @@ class PMNamConverter(ctk.CTk):
     # --- Baker UI Logic ---
     def choose_baker_di(self):
         path = filedialog.askopenfilename(
-            initialdir=DOWNLOADS_DIR,
+            initialdir=DI_DIR,
             title="Select DI .nam File", 
             filetypes=[("NAM Files", "*.nam")]
         )
@@ -626,7 +629,7 @@ class PMNamConverter(ctk.CTk):
 
     def choose_baker_ir(self):
         path = filedialog.askopenfilename(
-            initialdir=DOWNLOADS_DIR,
+            initialdir=IR_DIR,
             title="Select Cabinet IR .wav", 
             filetypes=[("Wav Files", "*.wav")]
         )
@@ -970,7 +973,16 @@ class PMNamConverter(ctk.CTk):
                 
             safe_name = "".join([c for c in name if c.isalnum() or c in (' ', '.', '_')]).rstrip()
             filename = f"{safe_name}{ext}"
-            save_path = os.path.join(DOWNLOADS_DIR, filename)
+            if target == "butcher":
+                target_dir = RIGS_DIR
+            elif target == "baker_di":
+                target_dir = DI_DIR
+            elif target == "baker_ir":
+                target_dir = IR_DIR
+            else:
+                target_dir = DOWNLOADS_DIR
+                
+            save_path = os.path.join(target_dir, filename)
 
             total_size = int(response.headers.get('content-length', 0))
             downloaded_size = 0
@@ -1015,7 +1027,7 @@ class PMNamConverter(ctk.CTk):
     # --- Core Processor Logic ---
     def select_file(self):
         file_path = filedialog.askopenfilename(
-            initialdir=DOWNLOADS_DIR,
+            initialdir=RIGS_DIR,
             title="Select .nam File",
             filetypes=[("Neural Amp Modeler Files", "*.nam"), ("JSON Files", "*.json"), ("All Files", "*.*")]
         )
