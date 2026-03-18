@@ -24,30 +24,6 @@ import re
 # Load environment variables
 load_dotenv()
 
-def create_tiled_background(window_width, window_height, pattern_path):
-    """Creates a tiled image to fill the given window dimensions."""
-    try:
-        pattern = Image.open(pattern_path)
-        pattern_width, pattern_height = pattern.size
-        
-        # Calculate how many full tiles are needed to cover the width and height
-        tiles_x = (window_width // pattern_width) + 1
-        tiles_y = (window_height // pattern_height) + 1
-        
-        # Create a new, transparent image to hold the tiled result
-        tiled_image = Image.new('RGBA', (window_width, window_height))
-        
-        # Paste the repeated pattern tiles perfectly, starting from the top-left
-        for i in range(tiles_x):
-            for j in range(tiles_y):
-                tiled_image.paste(pattern, (i * pattern_width, j * pattern_height))
-                
-        # Convert to a CTkImage for high-DPI scaling support
-        return ctk.CTkImage(light_image=tiled_image, dark_image=tiled_image, size=(window_width, window_height))
-        
-    except Exception as e:
-        print(f"DEBUG: Error creating tiled background: {e}")
-        return None
 
 # Appearance & Theme
 ctk.set_appearance_mode("dark")
@@ -215,27 +191,26 @@ class ProgressInterceptor:
         self.line_buffer = ""
 
     def write(self, text):
-        # Always pass the text to the real terminal so logs still appear
         self.original_stream.write(text)
-        
-        # Buffer and send full lines as logs
         self.line_buffer += text
         if '\n' in self.line_buffer:
             lines = self.line_buffer.split('\n')
             for line in lines[:-1]:
                 clean_line = line.strip()
                 if clean_line:
-                    # Filter out unnecessary progress bar junk if needed, but let's keep it for now
-                    self.queue.put(("log", clean_line))
+                    # Catch the 'silent' validation stage
+                    if "Validation Sanity Check" in clean_line:
+                        self.queue.put(("status", "Phase 4.5: Running Pre-Training Checks..."))
+                        self.queue.put(("log", "STATION STATUS: Running Audio Sanity Check (Expected CPU Delay)"))
+                    else:
+                        self.queue.put(("log", clean_line))
             self.line_buffer = lines[-1]
         
-        # Check for epoch progress in this chunk of text
+        # Progress bar mapping
         match = self.epoch_pattern.search(text)
         if match:
-            current = int(match.group(1))
-            total = int(match.group(2))
-            if total > 0:
-                self.queue.put(("progress", current / total))
+            current, total = int(match.group(1)), int(match.group(2))
+            self.queue.put(("progress", (current + 1) / (total + 1)))
     
     def flush(self):
         self.original_stream.flush()
@@ -352,6 +327,8 @@ def bake_worker(di_path, ir_path, input_wav_path, output_dir, model_name, queue,
         temp_target_path = os.path.join(output_dir, "baker_target_tmp.wav")
         sf.write(temp_target_path, output_audio, rate, subtype='PCM_16')
         queue.put(("log", "WAV PRE-RENDER COMPLETE. STARTING TRAINER..."))
+        queue.put(("log", "WAV RENDER VERIFIED. INITIALIZING PYTORCH..."))
+        queue.put(("log", "STANDBY: CPU is preparing data loaders (3-5 mins typical)"))
 
         # Phase 4.5: The Retraining Loop
         queue.put(("status", "Phase 4.5: Retraining Full Rig Neural Model..."))
@@ -453,17 +430,19 @@ class PMNamConverter(ctk.CTk):
             return "127.0.0.1"
 
     def update_background(self, event=None):
-        """Dynamically updates the tiled background pattern on window resize."""
-        # Use current window dimensions, or fallback to default size
-        width = self.winfo_width() if self.winfo_width() > 1 else 1000
-        height = self.winfo_height() if self.winfo_height() > 1 else 700
-        
-        # Generate the seamless tiled CTkImage
-        self.bg_image_tiled = create_tiled_background(width, height, TWEED_PATTERN_PATH)
-        
-        if self.bg_image_tiled:
-            # Update the background label with the new tiled pattern
-            self.bg_label.configure(image=self.bg_image_tiled)
+        """Scales the static tweed.png to the current window size."""
+        width = self.winfo_width() if self.winfo_width() > 1 else 900
+        height = self.winfo_height() if self.winfo_height() > 1 else 900
+        try:
+            raw_img = Image.open(TWEED_PATTERN_PATH)
+            self.bg_image_static = ctk.CTkImage(
+                light_image=raw_img, 
+                dark_image=raw_img, 
+                size=(width, height)
+            )
+            self.bg_label.configure(image=self.bg_image_static)
+        except Exception as e:
+            print(f"DEBUG: Background load failed: {e}")
 
     def setup_ui(self):
         # Initial empty label for background, will be tiled on first resize/call
