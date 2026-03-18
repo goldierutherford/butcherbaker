@@ -361,18 +361,19 @@ def bake_worker(di_path, ir_path, input_wav_path, output_dir, model_name, queue,
         original_stderr = sys.stderr
         sys.stdout = ProgressInterceptor(original_stdout, queue)
         sys.stderr = ProgressInterceptor(original_stderr, queue)
+        # Force Matplotlib to use a non-interactive backend globally
+        import matplotlib
+        matplotlib.use('Agg')
         
         try:
-            # Force non-interactive training to prevent background hangs
             train(
                 input_wav_path,    # source
                 temp_target_path,  # target
                 output_dir,        # export dir
-                epochs=epochs_to_run,        # dynamic for re-bake
+                epochs=epochs_to_run,
                 architecture="standard",
                 modelname=model_name,
-                silent=False,      # keep False for progress tracking
-                plot=False         # CRITICAL: Disable interactive plots
+                silent=False       # Keep False so our interceptor can see progress
             )
         finally:
             # ALWAYS restore the original terminal streams
