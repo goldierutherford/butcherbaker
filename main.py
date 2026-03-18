@@ -206,16 +206,28 @@ class VacuumTube(ctk.CTkCanvas):
         self.after(50, self.animate_glow) # 50ms = smooth 20fps animation
 
 class ProgressInterceptor:
-    """Intercepts stdout/stderr to parse PyTorch Lightning epoch progress."""
+    """Intercepts stdout/stderr to parse PyTorch Lightning epoch progress and relay logs."""
     def __init__(self, original_stream, queue):
         self.original_stream = original_stream
         self.queue = queue
         # Regex to match the 'Epoch 12/99' console output
         self.epoch_pattern = re.compile(r'Epoch (\d+)/(\d+)')
+        self.line_buffer = ""
 
     def write(self, text):
         # Always pass the text to the real terminal so logs still appear
         self.original_stream.write(text)
+        
+        # Buffer and send full lines as logs
+        self.line_buffer += text
+        if '\n' in self.line_buffer:
+            lines = self.line_buffer.split('\n')
+            for line in lines[:-1]:
+                clean_line = line.strip()
+                if clean_line:
+                    # Filter out unnecessary progress bar junk if needed, but let's keep it for now
+                    self.queue.put(("log", clean_line))
+            self.line_buffer = lines[-1]
         
         # Check for epoch progress in this chunk of text
         match = self.epoch_pattern.search(text)
@@ -227,6 +239,67 @@ class ProgressInterceptor:
     
     def flush(self):
         self.original_stream.flush()
+
+class ActivityLogModal(ctk.CTkToplevel):
+    def __init__(self, master, **kwargs):
+        super().__init__(master, **kwargs)
+        self.title("Baker Activity Log")
+        self.geometry("700x500")
+        self.configure(fg_color=OXBLOOD_PANEL)
+        
+        # UI Setup
+        self.header = ctk.CTkLabel(
+            self, text="STATION ACTIVITY LOG", 
+            font=ctk.CTkFont(family="Courier", size=18, weight="bold"), 
+            text_color=PANEL_TEXT
+        )
+        self.header.pack(pady=(20, 10))
+        
+        self.log_container = ctk.CTkFrame(self, fg_color="#1A1A1A", corner_radius=8, border_width=2, border_color="#333333")
+        self.log_container.pack(padx=20, pady=10, fill="both", expand=True)
+        
+        self.textbox = ctk.CTkTextbox(
+            self.log_container, 
+            fg_color="transparent", 
+            text_color=PANEL_TEXT, 
+            font=ctk.CTkFont(family="Courier New", size=12),
+            wrap="none"
+        )
+        self.textbox.pack(side="left", fill="both", expand=True, padx=5, pady=5)
+        self.textbox.configure(state="disabled")
+
+        self.btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.btn_frame.pack(pady=(0, 20))
+
+        self.clear_btn = ctk.CTkButton(
+            self.btn_frame, text="CLEAR", width=100,
+            command=self.clear_logs,
+            fg_color="#3B1C1A", border_width=1, border_color="#5A2E2A", text_color=PANEL_TEXT
+        )
+        self.clear_btn.pack(side="left", padx=10)
+
+        self.close_btn = ctk.CTkButton(
+            self.btn_frame, text="DISMISS", width=100,
+            command=self.destroy,
+            fg_color="#5A2E2A", hover_color="#7A3E38", text_color=PANEL_TEXT
+        )
+        self.close_btn.pack(side="left", padx=10)
+
+        # Focus this window
+        self.after(100, self.lift)
+        self.after(100, self.focus_force)
+
+    def append_log(self, text):
+        self.textbox.configure(state="normal")
+        self.textbox.insert("end", f"> {text}\n")
+        self.textbox.see("end")
+        self.textbox.configure(state="disabled")
+
+    def clear_logs(self):
+        self.textbox.configure(state="normal")
+        self.textbox.delete("1.0", "end")
+        self.textbox.configure(state="disabled")
+
 
 def bake_worker(di_path, ir_path, input_wav_path, output_dir, model_name, queue, epochs_to_run):
     """
@@ -246,11 +319,13 @@ def bake_worker(di_path, ir_path, input_wav_path, output_dir, model_name, queue,
         
         # Phase 4.2: Inference (The DI Amp)
         queue.put(("status", "Phase 4.2: Running DI Model Inference..."))
+        queue.put(("log", "INITIATING DI MODEL INFERENCE..."))
         # Load the NAM JSON dictionary first
         with open(di_path, "r", encoding="utf-8") as f:
             di_config = json.load(f)
             
         di_model = init_from_nam(di_config)
+        queue.put(("log", f"DI MODEL LOADED: {os.path.basename(di_path)}"))
         input_tensor = torch.from_numpy(input_audio).view(1, -1)
         
         with torch.no_grad():
@@ -259,20 +334,24 @@ def bake_worker(di_path, ir_path, input_wav_path, output_dir, model_name, queue,
             if isinstance(amp_output_audio, (list, tuple)):
                 amp_output_audio = amp_output_audio[0]
             amp_output_audio = amp_output_audio.numpy().flatten()
+        queue.put(("log", "DI INFERENCE COMPLETE."))
 
         # Phase 4.3: DSP Convolution (The Cabinet IR)
         queue.put(("status", "Phase 4.3: Convolving Cabinet IR..."))
+        queue.put(("log", f"LOADING CAB IR: {os.path.basename(ir_path)}"))
         ir_audio, ir_rate = sf.read(ir_path, dtype='float32')
         if len(ir_audio.shape) > 1:
             ir_audio = ir_audio[:, 0]
             
         # Use mode='full' and slice to preserve the initial trigger spike
+        queue.put(("log", "RUNNING FFT CONVOLUTION..."))
         convolved_audio = fftconvolve(amp_output_audio, ir_audio, mode='full')[:len(amp_output_audio)]
 
         # Prevent mathematical wrapping below the NAM validation threshold
         output_audio = np.clip(convolved_audio, -0.99, 0.99)
         temp_target_path = os.path.join(output_dir, "baker_target_tmp.wav")
         sf.write(temp_target_path, output_audio, rate, subtype='PCM_16')
+        queue.put(("log", "WAV PRE-RENDER COMPLETE. STARTING TRAINER..."))
 
         # Phase 4.5: The Retraining Loop
         queue.put(("status", "Phase 4.5: Retraining Full Rig Neural Model..."))
@@ -284,6 +363,9 @@ def bake_worker(di_path, ir_path, input_wav_path, output_dir, model_name, queue,
         sys.stderr = ProgressInterceptor(original_stderr, queue)
         
         try:
+            # Force non-interactive backend for matplotlib to prevent hangs on plotting
+            os.environ["MPLBACKEND"] = "Agg"
+            
             # The trainer will create {model_name}.nam in output_dir
             train(
                 input_wav_path,    # source
@@ -341,6 +423,9 @@ class PMNamConverter(ctk.CTk):
         self.baker_ir_display = ctk.StringVar(value="No Cabinet IR selected")
         self.baker_epochs = ctk.IntVar(value=15) # Default to Quick for CPU sanity
         
+        self.log_modal = None
+        self.activity_logs = []
+
         # Search Filters
         self.gear_filter = ctk.StringVar(value="Full Rig")
 
@@ -837,7 +922,15 @@ class PMNamConverter(ctk.CTk):
             height=65, fg_color="#8d1f1f", hover_color="#ba2b2b", text_color=PANEL_TEXT,
             command=self.start_baking
         )
-        self.bake_button.pack(side="left", fill="x", expand=True)
+        self.bake_button.pack(side="left", fill="x", expand=True, padx=(0, 10))
+
+        self.log_button = ctk.CTkButton(
+            action_frame, text="VIEW LOGS", 
+            width=110, height=65, fg_color="#3B1C1A", hover_color="#5A2E2A", text_color=PANEL_TEXT,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            command=self.show_activity_log
+        )
+        self.log_button.pack(side="left")
 
     # --- Assets Management ---
     def ensure_assets(self):
@@ -900,6 +993,11 @@ class PMNamConverter(ctk.CTk):
         self.bake_button.configure(state="disabled", text="BAKING...")
         self.baker_tube.start_glow()
         
+        # Reset and show activity logs
+        self.activity_logs.clear()
+        self.activity_logs.append(f"SESSION START: {os.path.basename(di)} processing...")
+        self.show_activity_log()
+        
         # Prepare output dir
         base_name = os.path.basename(di).replace(".nam", "")
         ir_name = os.path.basename(ir).replace(".wav", "")
@@ -925,16 +1023,26 @@ class PMNamConverter(ctk.CTk):
                 msg_type, content = self.baker_queue.get_nowait()
                 if msg_type == "status":
                     self.update_status(content, "#ffcc00")
+                elif msg_type == "log":
+                    self.activity_logs.append(content)
+                    if self.log_modal and self.log_modal.winfo_exists():
+                        self.log_modal.append_log(content)
                 elif msg_type == "progress":
                     # Smoothly update the Tkinter progress bar
                     self.progress_bar.set(content)
                 elif msg_type == "success":
                     self.update_status(content, "#44ff44")
+                    self.activity_logs.append(f"SUCCESS: {content}")
+                    if self.log_modal and self.log_modal.winfo_exists():
+                        self.log_modal.append_log(f"SUCCESS: {content}")
                     self.bake_button.configure(state="normal", text="BAKE NEW FULL RIG")
                     self.baker_tube.stop_glow()
                     return
                 elif msg_type == "error":
                     self.update_status(f"Baker Error: {content}", "#ff4d4d")
+                    self.activity_logs.append(f"ERROR: {content}")
+                    if self.log_modal and self.log_modal.winfo_exists():
+                        self.log_modal.append_log(f"ERROR: {content}")
                     self.bake_button.configure(state="normal", text="BAKE NEW FULL RIG")
                     self.baker_tube.stop_glow()
                     return
@@ -946,6 +1054,16 @@ class PMNamConverter(ctk.CTk):
             self.after(200, self.poll_baker_queue)
         else:
             self.bake_button.configure(state="normal")
+
+    def show_activity_log(self):
+        if self.log_modal is None or not self.log_modal.winfo_exists():
+            self.log_modal = ActivityLogModal(self)
+            # Fill with existing logs if any
+            for log in self.activity_logs:
+                self.log_modal.append_log(log)
+        else:
+            self.log_modal.focus()
+            self.log_modal.lift()
 
     # --- Tone3000 Search Logic ---
     def start_search_thread(self):
