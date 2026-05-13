@@ -32,7 +32,10 @@ ctk.set_default_color_theme("blue")
 # Constants (Relative to script directory for reliability)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DOWNLOADS_DIR = os.path.normpath(os.path.join(SCRIPT_DIR, "downloads"))
-BAKED_DIR = os.path.normpath(os.path.join(DOWNLOADS_DIR, "Baked_Rigs"))
+# Cloud-Sync Optimized Path (Google Drive)
+BAKED_DIR = r"G:\My Drive\NAM_Training"
+if not os.path.exists("G:"): # Fallback if G: drive not mounted
+    BAKED_DIR = os.path.normpath(os.path.join(DOWNLOADS_DIR, "Baked_Rigs"))
 RIGS_DIR = os.path.normpath(os.path.join(DOWNLOADS_DIR, "Full_Rigs"))
 DI_DIR = os.path.normpath(os.path.join(DOWNLOADS_DIR, "DI_Amps"))
 IR_DIR = os.path.normpath(os.path.join(DOWNLOADS_DIR, "Cabinet_IRs"))
@@ -58,6 +61,24 @@ TWEED_BG = "#D1A95F"       # Warm vintage tan
 OXBLOOD_PANEL = "#3B1C1A"  # Dark reddish-brown faceplate
 PANEL_TEXT = "#F4EBD9"     # Cream/Vintage white for text on Oxblood
 TWEED_TEXT = "#2A1A10"     # Dark brown for text on Tweed
+
+def get_project_folder_name(di_path, ir_path):
+    """Generates a folder name like 'Fender_Marshall'."""
+    amp = os.path.basename(di_path).split('_')[0].split('-')[0]
+    cab = os.path.basename(ir_path).split('_')[0].split('-')[0]
+    return f"{amp}_{cab}"
+
+class JewelLamp(ctk.CTkCanvas):
+    def __init__(self, master, **kwargs):
+        super().__init__(master, width=30, height=30, bg=kwargs.get('bg', "#4A0000"), highlightthickness=0)
+        self.is_on = False; self.draw_lamp()
+    def set_state(self, state):
+        self.is_on = state; self.draw_lamp()
+    def draw_lamp(self):
+        self.delete("all")
+        color = "#2ECC71" if self.is_on else "#4A0000"
+        self.create_oval(2, 2, 28, 28, fill="#888888", outline="#333333", width=2)
+        self.create_oval(6, 6, 24, 24, fill=color, outline="#300000", width=1)
 
 class AmpKnob(ctk.CTkCanvas):
     def __init__(self, master, command=None, **kwargs):
@@ -198,7 +219,7 @@ class ProgressInterceptor:
             for line in lines[:-1]:
                 clean_line = line.strip()
                 if clean_line:
-                    # Catch the 'silent' validation stage
+                    # Flag the 'silent' validation stage for the UI
                     if "Validation Sanity Check" in clean_line:
                         self.queue.put(("status", "Phase 4.5: Running Pre-Training Checks..."))
                         self.queue.put(("log", "STATION STATUS: Running Audio Sanity Check (Expected CPU Delay)"))
@@ -206,7 +227,7 @@ class ProgressInterceptor:
                         self.queue.put(("log", clean_line))
             self.line_buffer = lines[-1]
         
-        # Progress bar mapping
+        # Updated progress mapping for the bar
         match = self.epoch_pattern.search(text)
         if match:
             current, total = int(match.group(1)), int(match.group(2))
@@ -276,7 +297,7 @@ class ActivityLogModal(ctk.CTkToplevel):
         self.textbox.configure(state="disabled")
 
 
-def bake_worker(di_path, ir_path, input_wav_path, output_dir, model_name, queue, epochs_to_run):
+def bake_worker(di_path, ir_path, input_wav_path, output_dir, model_name, queue, epochs_to_run, resume_mode):
     """
     Isolated process for the Baker Engine pipeline.
     Handles Phase 4.1 to 4.5.
@@ -286,6 +307,7 @@ def bake_worker(di_path, ir_path, input_wav_path, output_dir, model_name, queue,
         import traceback
         from nam.models._from_nam import init_from_nam
         from nam.train.core import train
+        import pytorch_lightning as pl
 
         # Safely load audio natively as normalized float32
         input_audio, rate = sf.read(input_wav_path, dtype='float32')
@@ -327,8 +349,6 @@ def bake_worker(di_path, ir_path, input_wav_path, output_dir, model_name, queue,
         temp_target_path = os.path.join(output_dir, "baker_target_tmp.wav")
         sf.write(temp_target_path, output_audio, rate, subtype='PCM_16')
         queue.put(("log", "WAV PRE-RENDER COMPLETE. STARTING TRAINER..."))
-        queue.put(("log", "WAV RENDER VERIFIED. INITIALIZING PYTORCH..."))
-        queue.put(("log", "STANDBY: CPU is preparing data loaders (3-5 mins typical)"))
 
         # Phase 4.5: The Retraining Loop
         queue.put(("status", "Phase 4.5: Retraining Full Rig Neural Model..."))
@@ -342,7 +362,31 @@ def bake_worker(di_path, ir_path, input_wav_path, output_dir, model_name, queue,
         import matplotlib
         matplotlib.use('Agg')
         
+        queue.put(("log", "WAV RENDER VERIFIED. INITIALIZING PYTORCH..."))
+        queue.put(("log", "STANDBY: CPU is preparing data (3-5 mins typical)"))
+
+        checkpoint_path = None
+        if resume_mode:
+            # Search for existing lightning checkpoints
+            for root, _, files in os.walk(output_dir):
+                for f in files:
+                    if f.endswith(".ckpt"):
+                        checkpoint_path = os.path.join(root, f)
+                        break
+                if checkpoint_path: break
+            if checkpoint_path:
+                queue.put(("log", f"RESUMING FROM CHECKPOINT: {os.path.basename(checkpoint_path)}"))
+
         try:
+            # WORKAROUND: NAM's simplified train() doesn't expose ckpt_path.
+            # We monkey-patch the Trainer.fit method to force the resume if a checkpoint exists.
+            if resume_mode and checkpoint_path:
+                original_fit = pl.Trainer.fit
+                def patched_fit(self, *args, **kwargs):
+                    kwargs['ckpt_path'] = checkpoint_path
+                    return original_fit(self, *args, **kwargs)
+                pl.Trainer.fit = patched_fit
+                
             train(
                 input_wav_path,    # source
                 temp_target_path,  # target
@@ -356,6 +400,15 @@ def bake_worker(di_path, ir_path, input_wav_path, output_dir, model_name, queue,
             # ALWAYS restore the original terminal streams
             sys.stdout = original_stdout
             sys.stderr = original_stderr
+
+        # Harvest .nam logic
+        if not os.path.exists(os.path.join(output_dir, f"{model_name}.nam")):
+            import shutil
+            for root, _, files in os.walk(output_dir):
+                for f in files:
+                    if f.endswith(".nam"): 
+                        shutil.move(os.path.join(root, f), os.path.join(output_dir, f"{model_name}.nam"))
+                        break
 
         # Finalize
         if os.path.exists(temp_target_path):
@@ -398,6 +451,8 @@ class PMNamConverter(ctk.CTk):
         self.baker_di_display = ctk.StringVar(value="No DI model selected")
         self.baker_ir_display = ctk.StringVar(value="No Cabinet IR selected")
         self.baker_epochs = ctk.IntVar(value=15) # Default to Quick for CPU sanity
+        self.baker_resume = ctk.BooleanVar(value=False)
+        self.bake_mode = ctk.StringVar(value="Local") # Default to Local
         
         self.log_modal = None
         self.activity_logs = []
@@ -420,14 +475,19 @@ class PMNamConverter(ctk.CTk):
     def get_local_ip(self):
         """Utility to find the local IPv4 address on the Wi-Fi network."""
         try:
-            # Create a dummy socket to find the primary interface IP
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
+            s.settimeout(1)
+            # Dummy connect to resolve routing
+            s.connect(("10.254.254.254", 1))
             ip = s.getsockname()[0]
             s.close()
             return ip
         except Exception:
-            return "127.0.0.1"
+            try:
+                # Fallback to local hostname
+                return socket.gethostbyname(socket.gethostname())
+            except:
+                return "127.0.0.1"
 
     def update_background(self, event=None):
         """Scales the static tweed.png to the current window size."""
@@ -622,7 +682,7 @@ class PMNamConverter(ctk.CTk):
         self.server_url_label.pack(pady=10)
 
         # QR Code Display
-        self.qr_label = ctk.CTkLabel(self.postman_frame, text="", image="")
+        self.qr_label = ctk.CTkLabel(self.postman_frame, text="")
         self.qr_label.pack(pady=15)
 
         self.transfer_toggle = ctk.CTkButton(
@@ -662,6 +722,7 @@ class PMNamConverter(ctk.CTk):
                 li { margin: 10px 0; background: #E5C78F; padding: 15px; border-radius: 8px; border: 1px solid #8B6D3B; display: flex; justify-content: space-between; align-items: center; }
                 a { color: #3B1C1A; font-weight: bold; text-decoration: none; }
                 .success { color: #228B22; font-weight: bold; margin: 10px 0; }
+                .folder-link { background: #E5C78F; font-weight: bold; border-left: 5px solid #3B1C1A; }
             </style>
         </head>
         <body>
@@ -682,24 +743,65 @@ class PMNamConverter(ctk.CTk):
             </div>
             <div class="card">
                 <h3>Your Library</h3>
-                {% for category, file_list in categorized_files.items() %}
-                    <h4 style="text-align: left; color: #5A2E2A; margin-bottom: 5px;">{{ category }}</h4>
+                {% if cat %}
+                    <div style="text-align: left; margin-bottom: 15px; display: flex; gap: 10px; align-items: center;">
+                        <a href="/" class="btn" style="padding: 8px 15px; background: #5A2E2A;">&larr; HOME</a>
+                        {% if path %}
+                            <a href="/?cat={{ cat }}&path={{ parent_path }}" class="btn" style="padding: 8px 15px;">&uarr; UP</a>
+                        {% endif %}
+                        <span style="font-weight: bold; color: #3B1C1A; font-size: 0.8em; word-break: break-all;">/ {{ cat }}{% if path %}/{{ path }}{% endif %}</span>
+                    </div>
                     <ul>
-                        {% for file in file_list %}
+                        {% for d in dirs %}
+                            <li class="folder-link">
+                                <a href="/?cat={{ cat }}&path={% if path %}{{ path }}/{% endif %}{{ d }}" style="display: flex; align-items: center; gap: 10px; width: 100%;">
+                                    <span>📁</span> <span>{{ d }}</span>
+                                </a>
+                            </li>
+                        {% endfor %}
+                        {% for f in files %}
                             <li>
-                                <span style="word-break: break-all; text-align: left; padding-right: 10px; font-size: 0.9em;">{{ file }}</span>
+                                <span style="word-break: break-all; text-align: left; padding-right: 10px; font-size: 0.9em;">{{ f }}</span>
                                 <div style="display: flex; gap: 5px;">
-                                    <a href="/download/{{ category }}/{{ file }}" class="btn" style="padding: 8px 15px;">GET</a>
-                                    <form action="/delete/{{ category }}/{{ file }}" method="POST" style="margin: 0; padding: 0;">
-                                        <button type="submit" class="btn" style="padding: 8px 12px; background: #8d1f1f;" onclick="return confirm('Delete {{ file }}?')">X</button>
+                                    <a href="/download/{{ cat }}/{% if path %}{{ path }}/{% endif %}{{ f }}" class="btn" style="padding: 8px 15px;">GET</a>
+                                    <form action="/delete/{{ cat }}/{% if path %}{{ path }}/{% endif %}{{ f }}" method="POST" style="margin: 0; padding: 0;">
+                                        <button type="submit" class="btn" style="padding: 8px 12px; background: #8d1f1f;" onclick="return confirm('Delete {{ f }}?')">X</button>
                                     </form>
                                 </div>
                             </li>
-                        {% else %}
-                            <li style="color: #888; font-style: italic; justify-content: center;">Empty</li>
                         {% endfor %}
+                        {% if not files and not dirs %}
+                            <li style="color: #888; font-style: italic; justify-content: center;">Empty</li>
+                        {% endif %}
                     </ul>
-                {% endfor %}
+                {% else %}
+                    {% for category, content in categorized_content.items() %}
+                        <h4 style="text-align: left; color: #5A2E2A; margin-bottom: 5px;">{{ category }}</h4>
+                        <ul>
+                            {% for d in content.dirs %}
+                                <li class="folder-link">
+                                    <a href="/?cat={{ category }}&path={{ d }}" style="display: flex; align-items: center; gap: 10px; width: 100%;">
+                                        <span>📁</span> <span>{{ d }}</span>
+                                    </a>
+                                </li>
+                            {% endfor %}
+                            {% for f in content.files %}
+                                <li>
+                                    <span style="word-break: break-all; text-align: left; padding-right: 10px; font-size: 0.9em;">{{ f }}</span>
+                                    <div style="display: flex; gap: 5px;">
+                                        <a href="/download/{{ category }}/{{ f }}" class="btn" style="padding: 8px 15px;">GET</a>
+                                        <form action="/delete/{{ category }}/{{ f }}" method="POST" style="margin: 0; padding: 0;">
+                                            <button type="submit" class="btn" style="padding: 8px 12px; background: #8d1f1f;" onclick="return confirm('Delete {{ f }}?')">X</button>
+                                        </form>
+                                    </div>
+                                </li>
+                            {% endfor %}
+                            {% if not content.files and not content.dirs %}
+                                <li style="color: #888; font-style: italic; justify-content: center;">Empty</li>
+                            {% endif %}
+                        </ul>
+                    {% endfor %}
+                {% endif %}
             </div>
         </body>
         </html>
@@ -708,13 +810,42 @@ class PMNamConverter(ctk.CTk):
         @app.route('/')
         def index():
             msg = request.args.get('msg')
-            categorized_files = {
-                "Full_Rigs": [f for f in os.listdir(RIGS_DIR) if os.path.isfile(os.path.join(RIGS_DIR, f)) and f.endswith('.nam')],
-                "DI_Amps": [f for f in os.listdir(DI_DIR) if os.path.isfile(os.path.join(DI_DIR, f)) and f.endswith('.nam')],
-                "Cabinet_IRs": [f for f in os.listdir(IR_DIR) if os.path.isfile(os.path.join(IR_DIR, f)) and f.endswith('.wav')],
-                "Baked_Rigs": [f for f in os.listdir(BAKED_DIR) if f.endswith('.nam')] if os.path.exists(BAKED_DIR) else []
+            cat = request.args.get('cat')
+            subpath = request.args.get('path', '').strip('/')
+            
+            folder_map = {
+                "Full_Rigs": RIGS_DIR,
+                "DI_Amps": DI_DIR,
+                "Cabinet_IRs": IR_DIR,
+                "Baked_Rigs": BAKED_DIR
             }
-            return render_template_string(HTML_TEMPLATE, categorized_files=categorized_files, msg=msg)
+            
+            if not cat:
+                categorized_content = {}
+                for c, d in folder_map.items():
+                    if os.path.exists(d):
+                        items = os.listdir(d)
+                        ext = '.nam' if c != "Cabinet_IRs" else '.wav'
+                        files = sorted([f for f in items if os.path.isfile(os.path.join(d, f)) and f.endswith(ext)])
+                        dirs = sorted([f for f in items if os.path.isdir(os.path.join(d, f))])
+                        categorized_content[c] = {'files': files, 'dirs': dirs}
+                return render_template_string(HTML_TEMPLATE, categorized_content=categorized_content, msg=msg)
+            else:
+                base_dir = folder_map.get(cat)
+                if not base_dir or not os.path.exists(base_dir):
+                    return "Invalid category", 400
+                
+                target_dir = os.path.normpath(os.path.join(base_dir, subpath))
+                if not target_dir.startswith(os.path.normpath(base_dir)):
+                    return "Unauthorized path", 403
+                    
+                items = os.listdir(target_dir)
+                ext = '.nam' if cat != "Cabinet_IRs" else '.wav'
+                files = sorted([f for f in items if os.path.isfile(os.path.join(target_dir, f)) and f.endswith(ext)])
+                dirs = sorted([f for f in items if os.path.isdir(os.path.join(target_dir, f))])
+                
+                parent_path = os.path.dirname(subpath)
+                return render_template_string(HTML_TEMPLATE, cat=cat, path=subpath, files=files, dirs=dirs, parent_path=parent_path, msg=msg)
 
         @app.route('/upload', methods=['POST'])
         def upload_file():
@@ -744,30 +875,19 @@ class PMNamConverter(ctk.CTk):
             file.save(save_path)
             return f"<html><script>window.location.href='/?msg=Successfully Uploaded {filename}';</script></html>"
 
-        @app.route('/download/<folder>/<filename>')
+        @app.route('/download/<folder>/<path:filename>')
         def download_file(folder, filename):
-            # Strict mapping to prevent directory traversal
             folder_map = {
                 "Full_Rigs": RIGS_DIR,
                 "DI_Amps": DI_DIR,
                 "Cabinet_IRs": IR_DIR,
                 "Baked_Rigs": BAKED_DIR
             }
-            
             if folder not in folder_map:
                 return "Invalid directory", 403
-                
-            target_dir = folder_map[folder]
-            
-            # Strict extension check based on folder
-            if folder in ["Full_Rigs", "DI_Amps", "Baked_Rigs"] and not filename.endswith('.nam'):
-                return "Unauthorized file type", 403
-            if folder == "Cabinet_IRs" and not filename.endswith('.wav'):
-                return "Unauthorized file type", 403
-                
-            return send_from_directory(target_dir, filename)
+            return send_from_directory(folder_map[folder], filename)
 
-        @app.route('/delete/<folder>/<filename>', methods=['POST'])
+        @app.route('/delete/<folder>/<path:filename>', methods=['POST'])
         def delete_file(folder, filename):
             folder_map = {
                 "Full_Rigs": RIGS_DIR,
@@ -782,9 +902,9 @@ class PMNamConverter(ctk.CTk):
             file_path = os.path.join(target_dir, filename)
             
             try:
-                if os.path.exists(file_path):
+                if os.path.exists(file_path) and os.path.isfile(file_path):
                     os.remove(file_path)
-                    return f"<html><script>window.location.href='/?msg=Deleted {filename}';</script></html>"
+                    return f"<html><script>window.location.href='/?msg=Deleted {os.path.basename(filename)}';</script></html>"
                 else:
                     return f"<html><script>window.location.href='/?msg=File not found';</script></html>"
             except Exception as e:
@@ -815,7 +935,8 @@ class PMNamConverter(ctk.CTk):
             qr = qrcode.QRCode(version=1, box_size=5, border=2)
             qr.add_data(server_url)
             qr.make(fit=True)
-            img = qr.make_image(fill_color="black", back_color="white")
+            # Convert to RGB to ensure CTkImage handles it correctly across all systems
+            img = qr.make_image(fill_color="black", back_color="white").convert("RGB")
             
             # Convert to CTkImage for High-DPI scaling
             self.qr_img = ctk.CTkImage(light_image=img, dark_image=img, size=(180, 180))
@@ -854,6 +975,10 @@ class PMNamConverter(ctk.CTk):
         self.selection_frame = ctk.CTkFrame(self.baker_tab, corner_radius=15, fg_color=OXBLOOD_PANEL, border_width=4, border_color="#222222")
         self.selection_frame.pack(padx=20, pady=5, fill="both", expand=True)
 
+        # Bake Mode Toggle
+        mode_selector = ctk.CTkSegmentedButton(self.selection_frame, values=["Local", "Cloud"], variable=self.bake_mode, selected_color="#3B1C1A", selected_hover_color="#5A2E2A")
+        mode_selector.pack(fill="x", padx=30, pady=(15, 0))
+
         # Step 1: DI Section
         di_frame = ctk.CTkFrame(self.selection_frame, fg_color="transparent")
         di_frame.pack(fill="x", padx=30, pady=(20, 10))
@@ -874,18 +999,27 @@ class PMNamConverter(ctk.CTk):
         ctk.CTkButton(ir_inner, text="Choose IR", width=120, command=self.choose_baker_ir, fg_color="#5A2E2A", hover_color="#7A3E38", text_color=PANEL_TEXT).pack(side="left")
         ctk.CTkLabel(ir_inner, textvariable=self.baker_ir_display, font=ctk.CTkFont(size=13, family="Courier"), text_color="#A8A8A8", anchor="w").pack(side="left", padx=15, fill="x", expand=True)
 
-        # Quality Selection
+        # Quality, Stage, and Amp Switch
         quality_frame = ctk.CTkFrame(self.selection_frame, fg_color="transparent")
         quality_frame.pack(fill="x", padx=30, pady=10)
-        ctk.CTkLabel(quality_frame, text="Step 3: Bake Quality", font=ctk.CTkFont(weight="bold", size=15), text_color=PANEL_TEXT).pack(anchor="w")
         
+        # Epoch RadioButtons
         quality_inner = ctk.CTkFrame(quality_frame, fg_color="transparent")
-        quality_inner.pack(anchor="w", pady=(5, 0))
+        quality_inner.pack(fill="x")
+        ctk.CTkRadioButton(quality_inner, text="Test (1)", variable=self.baker_epochs, value=1, text_color=PANEL_TEXT).pack(side="left")
+        ctk.CTkRadioButton(quality_inner, text="Quick (15)", variable=self.baker_epochs, value=15, text_color=PANEL_TEXT).pack(side="left", padx=10)
+        ctk.CTkRadioButton(quality_inner, text="Full (99)", variable=self.baker_epochs, value=99, text_color=PANEL_TEXT).pack(side="left")
+
+        # Resume Switchboard
+        switch_inner = ctk.CTkFrame(quality_frame, fg_color="transparent")
+        switch_inner.pack(fill="x", pady=10)
+        ctk.CTkLabel(switch_inner, text="RESUME", text_color=PANEL_TEXT).pack(side="left")
+        self.resume_lamp = JewelLamp(switch_inner); self.resume_lamp.pack(side="left", padx=5)
         
-        ctk.CTkRadioButton(quality_inner, text="Quick Toast (15 Epochs)", variable=self.baker_epochs, value=15, 
-                           fg_color="#8d1f1f", hover_color="#ba2b2b", text_color=PANEL_TEXT).pack(side="left", padx=(0, 20))
-        ctk.CTkRadioButton(quality_inner, text="Full Roast (99 Epochs)", variable=self.baker_epochs, value=99, 
-                           fg_color="#8d1f1f", hover_color="#ba2b2b", text_color=PANEL_TEXT).pack(side="left")
+        def toggle_resume():
+            s = not self.baker_resume.get(); self.baker_resume.set(s)
+            self.resume_lamp.set_state(s)
+        self.resume_toggle = ctk.CTkButton(switch_inner, text="TOGGLE", width=50, command=toggle_resume).pack(side="left")
 
         # Action Area (Button + Tube)
         action_frame = ctk.CTkFrame(self.selection_frame, fg_color="transparent")
@@ -956,6 +1090,11 @@ class PMNamConverter(ctk.CTk):
                 self.baker_ir_display.set(os.path.basename(path))
 
     def start_baking(self):
+        # Handle Stop Request
+        if hasattr(self, "baker_process") and self.baker_process.is_alive():
+            self.stop_baking()
+            return
+
         di = self.baker_di_path.get()
         ir = self.baker_ir_path.get()
         
@@ -968,7 +1107,7 @@ class PMNamConverter(ctk.CTk):
             return
 
         self.update_status("Baking... This will take a few minutes.", "#ffcc00")
-        self.bake_button.configure(state="disabled", text="BAKING...")
+        self.bake_button.configure(text="STOP BAKE / SAVE", fg_color="#3B1C1A", hover_color="#5A2E2A")
         self.baker_tube.start_glow()
         
         # Reset and show activity logs
@@ -976,24 +1115,36 @@ class PMNamConverter(ctk.CTk):
         self.activity_logs.append(f"SESSION START: {os.path.basename(di)} processing...")
         self.show_activity_log()
         
-        # Prepare output dir
+        # New directory management
+        project_name = get_project_folder_name(di, ir)
+        project_dir = os.path.join(BAKED_DIR, project_name)
+        os.makedirs(project_dir, exist_ok=True)
+        
+        # Define model name for export
         base_name = os.path.basename(di).replace(".nam", "")
         ir_name = os.path.basename(ir).replace(".wav", "")
         model_name = f"{base_name}_{ir_name}_Baked"
-        output_dir = BAKED_DIR
 
-        # Multiprocessing Queue for status updates
-        self.baker_queue = multiprocessing.Queue()
-        
-        # Start the Baker Process
-        self.baker_process = multiprocessing.Process(
-            target=bake_worker, 
-            args=(di, ir, INPUT_WAV_PATH, output_dir, model_name, self.baker_queue, self.baker_epochs.get())
-        )
-        self.baker_process.start()
-        
-        # Start polling for status
-        self.poll_baker_queue()
+        if self.bake_mode.get() == "Local":
+            # Start local training
+            self.baker_queue = multiprocessing.Queue()
+            self.baker_process = multiprocessing.Process(
+                target=bake_worker, 
+                args=(di, ir, INPUT_WAV_PATH, project_dir, model_name, self.baker_queue, self.baker_epochs.get(), self.baker_resume.get())
+            )
+            self.baker_process.start()
+            self.poll_baker_queue()
+        else:
+            # Cloud Mode: Copy files to synced directory, then stop
+            import shutil
+            shutil.copy(di, os.path.join(project_dir, "di.nam")) # Keeping extensions as selected
+            shutil.copy(ir, os.path.join(project_dir, "ir.wav"))
+            self.activity_logs.append(f"PREPARED FOR CLOUD: Files ready in {project_dir}")
+            if self.log_modal and self.log_modal.winfo_exists():
+                self.log_modal.append_log(f"PREPARED FOR CLOUD: Files ready in {project_dir}")
+            self.update_status("Files synced! Open Colab now.", "#44ff44")
+            self.reset_baker_button()
+            self.baker_tube.stop_glow()
 
     def poll_baker_queue(self):
         try:
@@ -1006,23 +1157,20 @@ class PMNamConverter(ctk.CTk):
                     if self.log_modal and self.log_modal.winfo_exists():
                         self.log_modal.append_log(content)
                 elif msg_type == "progress":
-                    # Smoothly update the Tkinter progress bar
                     self.progress_bar.set(content)
                 elif msg_type == "success":
                     self.update_status(content, "#44ff44")
                     self.activity_logs.append(f"SUCCESS: {content}")
                     if self.log_modal and self.log_modal.winfo_exists():
                         self.log_modal.append_log(f"SUCCESS: {content}")
-                    self.bake_button.configure(state="normal", text="BAKE NEW FULL RIG")
-                    self.baker_tube.stop_glow()
+                    self.reset_baker_button()
                     return
                 elif msg_type == "error":
                     self.update_status(f"Baker Error: {content}", "#ff4d4d")
                     self.activity_logs.append(f"ERROR: {content}")
                     if self.log_modal and self.log_modal.winfo_exists():
                         self.log_modal.append_log(f"ERROR: {content}")
-                    self.bake_button.configure(state="normal", text="BAKE NEW FULL RIG")
-                    self.baker_tube.stop_glow()
+                    self.reset_baker_button()
                     return
         except:
             pass
@@ -1031,7 +1179,20 @@ class PMNamConverter(ctk.CTk):
         if hasattr(self, "baker_process") and self.baker_process.is_alive():
             self.after(200, self.poll_baker_queue)
         else:
-            self.bake_button.configure(state="normal")
+            self.reset_baker_button()
+
+    def stop_baking(self):
+        if hasattr(self, "baker_process") and self.baker_process.is_alive():
+            self.baker_process.terminate()
+            self.update_status("Bake Aborted. Progress saved to checkpoint.", "#ff4d4d")
+            self.activity_logs.append("USER ABORTED PROCESS. (RESUME AVAILABLE)")
+            if self.log_modal and self.log_modal.winfo_exists(): 
+                self.log_modal.append_log("MANUAL STOP: CHECKPOINT PRESERVED.")
+            self.reset_baker_button()
+            self.baker_tube.stop_glow()
+
+    def reset_baker_button(self):
+        self.bake_button.configure(state="normal", text="BAKE NEW FULL RIG", fg_color="#8d1f1f")
 
     def show_activity_log(self):
         if self.log_modal is None or not self.log_modal.winfo_exists():
