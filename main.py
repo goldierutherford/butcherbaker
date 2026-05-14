@@ -20,6 +20,7 @@ from dotenv import load_dotenv
 import soundfile as sf
 import sys
 import re
+import shutil
 
 # Load environment variables
 load_dotenv()
@@ -64,8 +65,8 @@ TWEED_TEXT = "#2A1A10"     # Dark brown for text on Tweed
 
 def get_project_folder_name(di_path, ir_path):
     """Generates a folder name like 'Fender_Marshall'."""
-    amp = os.path.basename(di_path).split('_')[0].split('-')[0]
-    cab = os.path.basename(ir_path).split('_')[0].split('-')[0]
+    amp = os.path.splitext(os.path.basename(di_path))[0].split('_')[0].split('-')[0]
+    cab = os.path.splitext(os.path.basename(ir_path))[0].split('_')[0].split('-')[0]
     return f"{amp}_{cab}"
 
 class JewelLamp(ctk.CTkCanvas):
@@ -314,41 +315,49 @@ def bake_worker(di_path, ir_path, input_wav_path, output_dir, model_name, queue,
         if len(input_audio.shape) > 1:
             input_audio = input_audio[:, 0] # Mono conversion
         
-        # Phase 4.2: Inference (The DI Amp)
-        queue.put(("status", "Phase 4.2: Running DI Model Inference..."))
-        queue.put(("log", "INITIATING DI MODEL INFERENCE..."))
-        # Load the NAM JSON dictionary first
-        with open(di_path, "r", encoding="utf-8") as f:
-            di_config = json.load(f)
-            
-        di_model = init_from_nam(di_config)
-        queue.put(("log", f"DI MODEL LOADED: {os.path.basename(di_path)}"))
-        input_tensor = torch.from_numpy(input_audio).view(1, -1)
-        
-        with torch.no_grad():
-            amp_output_audio = di_model(input_tensor)
-            # Handle possible sequence outputs
-            if isinstance(amp_output_audio, (list, tuple)):
-                amp_output_audio = amp_output_audio[0]
-            amp_output_audio = amp_output_audio.numpy().flatten()
-        queue.put(("log", "DI INFERENCE COMPLETE."))
-
-        # Phase 4.3: DSP Convolution (The Cabinet IR)
-        queue.put(("status", "Phase 4.3: Convolving Cabinet IR..."))
-        queue.put(("log", f"LOADING CAB IR: {os.path.basename(ir_path)}"))
-        ir_audio, ir_rate = sf.read(ir_path, dtype='float32')
-        if len(ir_audio.shape) > 1:
-            ir_audio = ir_audio[:, 0]
-            
-        # Use mode='full' and slice to preserve the initial trigger spike
-        queue.put(("log", "RUNNING FFT CONVOLUTION..."))
-        convolved_audio = fftconvolve(amp_output_audio, ir_audio, mode='full')[:len(amp_output_audio)]
-
-        # Prevent mathematical wrapping below the NAM validation threshold
-        output_audio = np.clip(convolved_audio, -0.99, 0.99)
         temp_target_path = os.path.join(output_dir, "baker_target_tmp.wav")
-        sf.write(temp_target_path, output_audio, rate, subtype='PCM_16')
-        queue.put(("log", "WAV PRE-RENDER COMPLETE. STARTING TRAINER..."))
+        
+        if di_path and ir_path:
+            # Phase 4.2: Inference (The DI Amp)
+            queue.put(("status", "Phase 4.2: Running DI Model Inference..."))
+            queue.put(("log", "INITIATING DI MODEL INFERENCE..."))
+            # Load the NAM JSON dictionary first
+            with open(di_path, "r", encoding="utf-8") as f:
+                di_config = json.load(f)
+                
+            di_model = init_from_nam(di_config)
+            queue.put(("log", f"DI MODEL LOADED: {os.path.basename(di_path)}"))
+            input_tensor = torch.from_numpy(input_audio).view(1, -1)
+            
+            with torch.no_grad():
+                amp_output_audio = di_model(input_tensor)
+                # Handle possible sequence outputs
+                if isinstance(amp_output_audio, (list, tuple)):
+                    amp_output_audio = amp_output_audio[0]
+                amp_output_audio = amp_output_audio.numpy().flatten()
+            queue.put(("log", "DI INFERENCE COMPLETE."))
+
+            # Phase 4.3: DSP Convolution (The Cabinet IR)
+            queue.put(("status", "Phase 4.3: Convolving Cabinet IR..."))
+            queue.put(("log", f"LOADING CAB IR: {os.path.basename(ir_path)}"))
+            ir_audio, ir_rate = sf.read(ir_path, dtype='float32')
+            if len(ir_audio.shape) > 1:
+                ir_audio = ir_audio[:, 0]
+                
+            # Use mode='full' and slice to preserve the initial trigger spike
+            queue.put(("log", "RUNNING FFT CONVOLUTION..."))
+            convolved_audio = fftconvolve(amp_output_audio, ir_audio, mode='full')[:len(amp_output_audio)]
+
+            # Prevent mathematical wrapping below the NAM validation threshold
+            output_audio = np.clip(convolved_audio, -0.99, 0.99)
+            sf.write(temp_target_path, output_audio, rate, subtype='PCM_16')
+            queue.put(("log", "WAV PRE-RENDER COMPLETE. STARTING TRAINER..."))
+        else:
+            queue.put(("status", "Phase 4.4: Using existing pre-rendered audio..."))
+            queue.put(("log", "SKIPPING PRE-RENDER: Using existing baker_target_tmp.wav"))
+            if not os.path.exists(temp_target_path):
+                queue.put(("error", "Target audio missing from project folder. Cannot resume."))
+                return
 
         # Phase 4.5: The Retraining Loop
         queue.put(("status", "Phase 4.5: Retraining Full Rig Neural Model..."))
@@ -367,15 +376,21 @@ def bake_worker(di_path, ir_path, input_wav_path, output_dir, model_name, queue,
 
         checkpoint_path = None
         if resume_mode:
-            # Search for existing lightning checkpoints
+            best_epoch = -1
             for root, _, files in os.walk(output_dir):
                 for f in files:
                     if f.endswith(".ckpt"):
-                        checkpoint_path = os.path.join(root, f)
-                        break
-                if checkpoint_path: break
+                        # Extract the epoch number to find the most recent checkpoint
+                        match = re.search(r'epoch=(\d+)', f)
+                        epoch_num = int(match.group(1)) if match else 0
+                        if epoch_num > best_epoch:
+                            best_epoch = epoch_num
+                            checkpoint_path = os.path.join(root, f)
+                            
             if checkpoint_path:
-                queue.put(("log", f"RESUMING FROM CHECKPOINT: {os.path.basename(checkpoint_path)}"))
+                # If resuming, tell the trainer to add the requested epochs ON TOP of what we've already done
+                epochs_to_run = best_epoch + 1 + epochs_to_run
+                queue.put(("log", f"RESUMING FROM CHECKPOINT: {os.path.basename(checkpoint_path)} (Total epochs target: {epochs_to_run})"))
 
         try:
             # WORKAROUND: NAM's simplified train() doesn't expose ckpt_path.
@@ -452,6 +467,7 @@ class PMNamConverter(ctk.CTk):
         self.baker_ir_display = ctk.StringVar(value="No Cabinet IR selected")
         self.baker_epochs = ctk.IntVar(value=15) # Default to Quick for CPU sanity
         self.baker_resume = ctk.BooleanVar(value=False)
+        self.baker_project_path = ctk.StringVar(value="")
         self.bake_mode = ctk.StringVar(value="Local") # Default to Local
         
         self.log_modal = None
@@ -1019,7 +1035,12 @@ class PMNamConverter(ctk.CTk):
         def toggle_resume():
             s = not self.baker_resume.get(); self.baker_resume.set(s)
             self.resume_lamp.set_state(s)
-        self.resume_toggle = ctk.CTkButton(switch_inner, text="TOGGLE", width=50, command=toggle_resume).pack(side="left")
+        ctk.CTkButton(switch_inner, text="TOGGLE", width=50, command=toggle_resume).pack(side="left", padx=10)
+        
+        # New Resume Project Feature
+        ctk.CTkButton(switch_inner, text="LOAD PROJECT FOLDER", width=120, command=self.choose_baker_project, fg_color="#5A2E2A", hover_color="#7A3E38", text_color=PANEL_TEXT).pack(side="left", padx=15)
+        self.baker_project_display = ctk.CTkLabel(switch_inner, text="", font=ctk.CTkFont(size=11, family="Courier"), text_color="#A8A8A8")
+        self.baker_project_display.pack(side="left", padx=5)
 
         # Action Area (Button + Tube)
         action_frame = ctk.CTkFrame(self.selection_frame, fg_color="transparent")
@@ -1089,6 +1110,20 @@ class PMNamConverter(ctk.CTk):
             if hasattr(self, 'baker_ir_display'):
                 self.baker_ir_display.set(os.path.basename(path))
 
+    def choose_baker_project(self):
+        path = filedialog.askdirectory(
+            initialdir=BAKED_DIR,
+            title="Select Baker Project Folder"
+        )
+        if path:
+            self.baker_project_path.set(path)
+            self.baker_project_display.configure(text=os.path.basename(path))
+            # Automatically turn on resume switch
+            if not self.baker_resume.get():
+                self.baker_resume.set(True)
+                self.resume_lamp.set_state(True)
+            self.update_status(f"Loaded project: {os.path.basename(path)}", "#44ff44")
+
     def start_baking(self):
         # Handle Stop Request
         if hasattr(self, "baker_process") and self.baker_process.is_alive():
@@ -1097,14 +1132,26 @@ class PMNamConverter(ctk.CTk):
 
         di = self.baker_di_path.get()
         ir = self.baker_ir_path.get()
+        project_path = self.baker_project_path.get()
         
-        if "No" in di or "No" in ir:
-            self.update_status("Error: Select DI and IR first.", "#ff4d4d")
-            return
-            
         if not os.path.exists(INPUT_WAV_PATH):
             self.update_status("Error: input.wav missing from assets.", "#ff4d4d")
             return
+
+        # Determine if we are resuming an existing project or starting new
+        if project_path and self.baker_resume.get():
+            project_dir = project_path
+            model_name = os.path.basename(project_dir) + "_Baked"
+            di = None
+            ir = None
+        else:
+            if "No" in di or "No" in ir:
+                self.update_status("Error: Select DI and IR first.", "#ff4d4d")
+                return
+            project_name = get_project_folder_name(di, ir)
+            project_dir = os.path.join(BAKED_DIR, project_name)
+            os.makedirs(project_dir, exist_ok=True)
+            model_name = f"{os.path.basename(di).split('.')[0]}_{os.path.basename(ir).split('.')[0]}_Baked"
 
         self.update_status("Baking... This will take a few minutes.", "#ffcc00")
         self.bake_button.configure(text="STOP BAKE / SAVE", fg_color="#3B1C1A", hover_color="#5A2E2A")
@@ -1112,18 +1159,11 @@ class PMNamConverter(ctk.CTk):
         
         # Reset and show activity logs
         self.activity_logs.clear()
-        self.activity_logs.append(f"SESSION START: {os.path.basename(di)} processing...")
+        if di:
+            self.activity_logs.append(f"SESSION START: {os.path.basename(di)} processing...")
+        else:
+            self.activity_logs.append(f"SESSION START: Resuming {os.path.basename(project_dir)}...")
         self.show_activity_log()
-        
-        # New directory management
-        project_name = get_project_folder_name(di, ir)
-        project_dir = os.path.join(BAKED_DIR, project_name)
-        os.makedirs(project_dir, exist_ok=True)
-        
-        # Define model name for export
-        base_name = os.path.basename(di).replace(".nam", "")
-        ir_name = os.path.basename(ir).replace(".wav", "")
-        model_name = f"{base_name}_{ir_name}_Baked"
 
         if self.bake_mode.get() == "Local":
             # Start local training
@@ -1135,16 +1175,41 @@ class PMNamConverter(ctk.CTk):
             self.baker_process.start()
             self.poll_baker_queue()
         else:
-            # Cloud Mode: Copy files to synced directory, then stop
-            import shutil
-            shutil.copy(di, os.path.join(project_dir, "di.nam")) # Keeping extensions as selected
-            shutil.copy(ir, os.path.join(project_dir, "ir.wav"))
-            self.activity_logs.append(f"PREPARED FOR CLOUD: Files ready in {project_dir}")
-            if self.log_modal and self.log_modal.winfo_exists():
-                self.log_modal.append_log(f"PREPARED FOR CLOUD: Files ready in {project_dir}")
-            self.update_status("Files synced! Open Colab now.", "#44ff44")
+            # Cloud Mode: Copy and RENAME files for the NAM trainer
+            if di and ir:
+                targets = {
+                    di: os.path.join(project_dir, "di.nam"),
+                    ir: os.path.join(project_dir, "ir.wav"),
+                    INPUT_WAV_PATH: os.path.join(project_dir, "input.wav")
+                }
+
+                for src, dst in targets.items():
+                    # Pre-Copy Cleanup: Ensure target isn't a stale directory
+                    if os.path.exists(dst) and os.path.isdir(dst):
+                        shutil.rmtree(dst)
+                    
+                    # Explicit Copy with Metadata Preservation
+                    shutil.copy2(src, dst)
+
+                    # Validation
+                    if not os.path.isfile(dst):
+                        error_msg = f"CLOUD ERROR: {os.path.basename(dst)} is not a file!"
+                        self.activity_logs.append(error_msg)
+                        if self.log_modal and self.log_modal.winfo_exists():
+                            self.log_modal.append_log(error_msg)
+                        self.update_status(error_msg, "#ff4d4d")
+                        return
+
+                self.update_status(f"Cloud Prep Ready: {project_dir}", "#44ff44")
+                self.activity_logs.append(f"PREPARED FOR CLOUD: Files ready in {project_dir}")
+            else:
+                self.update_status(f"Cloud Resume Ready: {project_dir}", "#44ff44")
+                self.activity_logs.append(f"CLOUD RESUME: Utilizing existing files in {project_dir}")
+                
             self.reset_baker_button()
             self.baker_tube.stop_glow()
+            if self.log_modal and self.log_modal.winfo_exists():
+                self.log_modal.append_log(f"PREPARED FOR CLOUD: Files ready in {project_dir}")
 
     def poll_baker_queue(self):
         try:
